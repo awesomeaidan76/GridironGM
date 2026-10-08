@@ -23,6 +23,8 @@ import playbook as pb
 import defense as dfn_lib
 import specialteams as st_lib
 import advanced as adv_lib
+import trenches
+import grades
 
 QUARTER = 900
 
@@ -33,6 +35,8 @@ DEF_POS = {"DT", "EDGE", "LB", "CB", "S"}
 # Energy runs 0-100. Every snap on the field costs energy (big men and pass
 # rushers burn it fastest); the huddle gives a little back, the sideline a lot.
 # Tired players lose physical sharpness and get hurt more, so coaches rotate.
+RUN_BLOCK_SHIFT = 0.0      # calibration offset for the matchup-based run blocking edge
+PASS_RUSH_BASE = -2.40      # per-matchup log-odds of a rusher winning (calibrated to NFL pressure rates)
 DRAIN = {"QB": 0.35, "RB": 1.9, "FB": 1.5, "WR": 1.25, "TE": 1.35, "OT": 0.75, "IOL": 0.75,
          "DT": 3.0, "EDGE": 2.6, "LB": 1.45, "CB": 1.1, "S": 1.0, "K": 0.0, "P": 0.0}
 HUDDLE_REC = 0.6           # per snap, on the field, normal tempo
@@ -1208,6 +1212,8 @@ class GameSim:
         self._ocall = None
         self.dcall = None
         self._last_tackler = None
+        self._rush_winner = None
+        self._run_side = random.choice([-1, 1])
         mid_drive = self.drive is not None and self.drive["plays"] >= 1
         self.no_huddle = mid_drive and (self.urgency(self.poss) == "hurry" or
                                         random.random() < self.poss.plan["tempo"] * 0.30)
@@ -1683,6 +1689,8 @@ class GameSim:
                 if p is not None and route_of.get(p.id) == "block" and random.random() < 0.55:
                     route_of[p.id] = "checkdown"
         rushers = [(p, 1.0) for p in edges] + [(p, 0.62) for p in dts]
+        kinds = {p.id: "edge" for p in edges}
+        kinds.update({p.id: "inside" for p in dts})
         cov_lbs, cov_ss, cov_cbs = list(lbs), list(ss), list(cbs)
         for who in dc["who"]:
             pool = {"LB": cov_lbs, "S": cov_ss, "NB": cov_cbs[2:] or cov_lbs}[who]
@@ -1692,12 +1700,14 @@ class GameSim:
                     if b in lst:
                         lst.remove(b)
                 rushers.append((b, 0.55))
+                kinds[b.id] = "blitz"
         if dc["rush"] == 3 and dts:
             rushers = [r for r in rushers if r[0] is not dts[-1]]
         if self._spy_on and cov_lbs:
             cov_lbs.pop(0)                       # the spy mirrors the quarterback
         if dc["sim"] and dts and lbs:
             rushers = [r for r in rushers if r[0] is not dts[-1]] + [(lbs[-1], 0.62)]
+            kinds[lbs[-1].id] = "blitz"
         keep_in = []
         if rb and random.random() < (0.22 if not blitz else 0.45):
             keep_in.append(rb)
@@ -1718,35 +1728,46 @@ class GameSim:
                              "cov": coverage, "front": dc["front"], "blitz": blitz, "dcall": dc["name"],
                              "n_lb": len(lbs), "n_cb": len(cbs), "n_s": len(ss), "pa": pa}
 
-        rush = self._pass_rush(rushers) + dfn_lib.FRONTS[dc["front"]]["rush"]
-        pro = self._pass_pro(keep_in)
+        # Protection: every rusher against his blocker(s)
+        edge_add = dfn_lib.FRONTS[dc["front"]]["rush"] \
+            + (staff_mod.def_calling(de.team) - staff_mod.off_calling(off.team)) * 0.35
+        if dc["sim"]:
+            edge_add += 2.0 - (e(qb, "progression_reads") - 70) * 0.10
+        if dc["rush"] == 3:
+            edge_add -= 6.0
+        stunt = 0.0
         if dc["stunt"]:
             # Line games: a sharp, experienced line passes them off; a green one gives up a free rusher
             ol_aw = sum(e(p, "awareness") for p in off.ol) / max(1, len(off.ol))
-            rush += 1.5 - (ol_aw - 70) * 0.18 + random.gauss(0, 3.0)
-        if dc["sim"]:
-            rush += 2.0 - (e(qb, "progression_reads") - 70) * 0.10
-        if dc["rush"] == 3:
-            rush -= 6.0
+            stunt = 1.5 - (ol_aw - 70) * 0.18 + random.gauss(0, 3.0)
         time_req = {"screen": -1.3, "short": -0.40, "medium": 0.18, "deep": 0.48,
                     "hail": 0.6}[ptype]
         if pa:
             time_req += 0.30 if not call.get("trick") else 0.55
         if call.get("rpo"):
             time_req -= 0.6
-        p_press = _sig(-1.07 + (rush - pro) / 33.0 + time_req + (0.42 if blitz else 0.0))
-        pressured = random.random() < p_press
+        # The quarterback's clock: quick processors get the ball out before the rush arrives
+        time_req += (70 - e(qb, "decision_making")) / 250.0
+        rlist = [(p, kinds.get(p.id, "blitz")) for p, _ in rushers]
+        prot = trenches.assign_protection(off.ol, keep_in, rlist)
+        probs = trenches.contest_pass(e, prot, PASS_RUSH_BASE, time_req, stunt=stunt)
+        probs = [(_sig(math.log(max(1e-6, p) / max(1e-6, 1 - p)) + edge_add / 15.0), mg + edge_add)
+                 for p, mg in probs]
+        win_m, all_wins = trenches.resolve_pass_rush(e, prot, probs)
+        pressured = win_m is not None
+        self._prot_record(prot, all_wins, win_m)
+        self._rush_winner = win_m
 
         # Sack / scramble / throwaway under pressure
         if pressured:
             self._adv["pressured"] = True
             escape = e(qb, "pocket_presence") * 0.5 + e(qb, "agility") * 0.25 \
                 + e(qb, "speed") * 0.25
-            p_sack = _clip(0.29 - (escape - 62) / 210.0, 0.08, 0.48) * self.sack_mult * self.rx["sack"]
+            p_sack = _clip(0.275 - (escape - 62) / 210.0, 0.07, 0.46) * self.sack_mult * self.rx["sack"]
             if random.random() < p_sack:
                 return self._sack(qb, rushers)
             mob = (e(qb, "speed") - 60) / 75.0
-            hit_rusher = self._weighted_rusher(rushers)
+            hit_rusher = win_m["rusher"]
             self.st(hit_rusher, "pressures")
             if random.random() < _clip(mob * 0.65, 0.03, 0.50) and not hail:
                 self._adv["scramble"] = True
@@ -1755,6 +1776,7 @@ class GameSim:
                 return self._qb_run(qb, scramble=True)
             if random.random() < 0.38:
                 self.st(hit_rusher, "qb_hits")
+                self._charge_block(win_m, "hits_allowed")
             if random.random() < 0.20 and not hail:
                 self.st(qb, "pass_att")
                 self.ts(off, "pass_att")
@@ -1804,6 +1826,14 @@ class GameSim:
                 o += dc["box"] * 1.2                  # an eighth man in the box is one fewer in coverage
             o += dfn_lib.route_edge(coverage, route_of.get(r.id, ""))
             scored.append((r, role, prior, o, d))
+            # Every route is a rep: did he get open, did the defender stay on him?
+            self.st(r, "routes")
+            if o > 4.0:
+                self.st(r, "route_wins")
+            if d is not None:
+                self.st(d, "cov_snaps")
+                if o < -4.0:
+                    self.st(d, "cov_wins")
         # The quarterback's read: better processors find the open man more often
         read = e(qb, "progression_reads") * 0.6 + e(qb, "decision_making") * 0.4
         temp = _clip(15.0 - (read - 60) / 5.0, 7.0, 17.0) * (1.25 if pressured else 1.0)
@@ -2125,8 +2155,12 @@ class GameSim:
         return out
 
     def _sack(self, qb, rushers):
-        sacker = self._weighted_rusher(rushers)
-        if random.random() < 0.22:
+        win_m = getattr(self, "_rush_winner", None)
+        sacker = win_m["rusher"] if win_m else self._weighted_rusher(rushers)
+        coverage_sack = random.random() < 0.22
+        if not coverage_sack and win_m:
+            self._charge_block(win_m, "sacks_allowed")
+        if coverage_sack:
             # Coverage sacks, delayed blitzes and clean-up by the second level
             extra = self.dfn.lu["LB"][:2] + self.dfn.lu["S"][:1] + self.dfn.lu["CB"][:1]
             if extra:
@@ -2151,14 +2185,51 @@ class GameSim:
         self.st(qb, "sack_yds", loss)
         self.ts(self.poss, "sacked")
         self.ts(self.poss, "sack_yds", loss)
+        beat = ""
+        if not coverage_sack and win_m and win_m["blockers"]:
+            b = win_m["blockers"][0]
+            beat = f" (beat {b.position} {_short(b.name)})"
+        elif not coverage_sack and win_m and not win_m["blockers"]:
+            beat = " (unblocked)"
         out = {"kind": "sack", "yards": -loss, "time": 6, "clock_runs": True,
-               "text": f"{_short(qb.name)} SACKED by {who} for -{loss}"}
+               "text": f"{_short(qb.name)} SACKED by {who} for -{loss}{beat}"}
         if random.random() < 0.095 * (1.4 - self.e(qb, "ball_security") / 100.0) * self.to_rate:
             out["text"] = f"{_short(qb.name)} SACKED by {who}"
             return self._fumble(out, qb, sacker)
         if self.yl - loss <= 0:
             out["safety"] = True
         return out
+
+    def _prot_record(self, prot, winners, first):
+        """Pass-protection bookkeeping: snaps, wins, double teams, pressures allowed."""
+        won = {id(x) for x in winners}
+        for x in prot:
+            r = x["rusher"]
+            self.st(r, "pr_snaps")
+            if id(x) in won:
+                self.st(r, "pr_wins")
+            if len(x["blockers"]) > 1:
+                self.st(r, "double_teamed")
+            for b in x["blockers"] + x.get("chippers", []):
+                self.st(b, "pb_snaps")
+        if first is not None:
+            self._charge_block(first, "pressures_allowed")
+
+    def _record_run_blocks(self, events, yards):
+        for b, d, margin, poa in events:
+            if b is not None:
+                self.st(b, "rb_snaps")
+                if margin > 0:
+                    self.st(b, "rb_wins")
+                    if margin > 0.85 and yards >= 4 and random.random() < 0.5:
+                        self.st(b, "pancakes")
+            self.st(d, "rd_snaps")
+            if margin < -0.25:
+                self.st(d, "rd_wins")
+
+    def _charge_block(self, m, key):
+        if m and m["blockers"]:
+            self.st(m["blockers"][0], key)
 
     def _weighted_rusher(self, rushers):
         ws = [max(5.0, max(self.e(p, "power_move"), self.e(p, "finesse_move")) + 100) * w
@@ -2358,26 +2429,19 @@ class GameSim:
             self.cur_diag.update(run=path_key if path_key in pb.RUN_PATHS else concept, carrier=cslot,
                                  play=("RPO " if call.get("rpo") else "") + concept.title() + option_note)
 
+        # Blocking: one-on-one matchups at the point of attack (and the backside)
         wts = self.RUN_BLOCK[concept]
-        blk = sum(sum(e(p, a) * k for a, k in wts.items()) for p in off.ol) / max(1, len(off.ol))
-        for t in tes:
-            blk += (e(t, "run_block") - 55) * 0.05
-        if fbp and carrier is not fbp:
-            blk += (e(fbp, "run_block") - 55) * (0.09 if concept == "power" else 0.06)
-        blk += (staff_mod.off_calling(off.team) - 10) * 0.3
-
         front = dts + edges
-        dline = sum(e(p, "run_stop") * 0.35 + e(p, "block_shedding") * 0.30
-                    + e(p, "strength") * 0.20 + e(p, "gap_awareness") * 0.15
-                    for p in front) / max(1, len(front))
-        lbv = sum(e(p, "play_recognition") * 0.30 + e(p, "tackling") * 0.25
-                  + e(p, "block_shedding") * 0.20 + e(p, "pursuit") * 0.25
-                  for p in lbs) / max(1, len(lbs))
-        dv = dline * 0.62 + lbv * 0.38
+        lead = fbp if (fbp is not None and carrier is not fbp) else None
+        bd, blk_events = trenches.run_matchups(e, off.ol, tes, lead, front, lbs, ss, not outside,
+                                               self._run_side, wts)
+        extra = sum((e(t, "run_block") - 55) * 0.05 for t in tes)
+        extra += (staff_mod.off_calling(off.team) - 10) * 0.3
         box = {1: -5.0, 2: -2.5, 3: 0.0, 4: 1.5}.get(len(lbs), 0.0)
         box += dfn_lib.run_edge(dc, inside=not outside) + dc["box"] * 1.3
-        dv += box + (staff_mod.def_calling(de.team) - 10) * 0.3
-        bd = (blk - dv) / 28.0
+        extra -= box + (staff_mod.def_calling(de.team) - 10) * 0.3
+        bd += extra / 28.0 + RUN_BLOCK_SHIFT
+        self._run_events = blk_events
 
         # Concept-specific edges
         sd_mult, stuff_add, big_mult, mean_add = 1.0, 0.0, 1.0, 0.0
@@ -2452,10 +2516,12 @@ class GameSim:
         to_goal = 100 - self.yl
         p_stuff = _clip(0.170 - 0.065 * bd - 0.025 * rd + stuff_add
                         + (0.10 if to_goal <= 5 else 0.0), 0.05, 0.45)
+        ybc = None
         if random.random() < p_stuff:
             yards = random.choices([0, -1, -2, -3, -4], weights=[40, 25, 18, 10, 7])[0]
             if concept == "reverse":
                 yards -= random.randint(1, 5)
+            ybc = yards
         else:
             # A short, sure gain plus a long-tailed "what he makes of it" part: most runs go
             # for 1-5 yards, a few break for 10+ (NFL shape: median 3, mean ~4.3)
@@ -2469,6 +2535,7 @@ class GameSim:
                 ext_m = 3.4 * (0.8 if to_goal <= 10 else 1.0)
             extra = random.expovariate(1.0 / max(0.6, (ext_m + 0.70 * rd + 0.45 * bd) * sd_mult ** 0.5))
             yards = (base + extra) * self.run_mult
+            ybc = int(base * self.run_mult)
             brk = (0.026 + 0.009 * rd + 0.006 * bd + (e(carrier, "speed") - 85) / 1100.0) \
                 * self.big_play * big_mult
             if random.random() < max(0.004, brk):
@@ -2477,7 +2544,10 @@ class GameSim:
         yards = min(yards, to_goal)
         if self.yl + yards <= 0:
             yards = -self.yl
-        side = random.choice(["left", "right"])
+        side = "left" if self._run_side < 0 else "right"
+        self._record_run_blocks(blk_events, yards)
+        if carrier is not None and ybc is not None:
+            self.st(carrier, "ybc", min(yards, ybc))
         if concept in ("inside zone", "power", "counter", "draw"):
             label = {"inside zone": random.choice(["up the middle", f"inside zone {side}"]),
                      "power": f"power {side}", "counter": f"counter {side}",
@@ -2926,6 +2996,9 @@ class GameSim:
                               if d.get("rz") and d["result"] == "Touchdown")
         res.home_score = self.home.score
         res.away_score = self.away.score
+        # Game grades for everyone who played
+        for pid, line in res.player_stats.items():
+            grades.stamp(line, res.player_meta[pid][1])
 
 
 def simulate_game(home, away, week=0, season=0, playoff=None, neutral=False,

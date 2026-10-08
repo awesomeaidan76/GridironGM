@@ -6,6 +6,7 @@ from stats import (comp_pct, passer_rating, ypa, ypc, ypr, total_tackles, fg_pct
                    punt_avg)
 from ui_widgets import cell
 import advanced as adv
+import grades as grd
 
 
 def _f1(v):
@@ -60,8 +61,13 @@ ADV_GROUPS = {
                                    s["cay"] / s["pass_cmp"] if s["pass_cmp"] else 0.0),
                               cell(_pct(adv.pressure_rate(s)), adv.pressure_rate(s)),
                               s["pass_first"], cell(_f1(passer_rating(s)), passer_rating(s))]),
-    "AdvRush": (["Att", "Yds", "EPA", "EPA/Att", "Success", "1st Dn", "20+", "Avg"],
-                lambda s, c: [s["rush_att"], s["rush_yds"], cell(f"{s['rush_epa']:+.1f}", s["rush_epa"]),
+    "AdvRush": (["Att", "Yds", "YBC/Att", "YAC/Att", "EPA", "EPA/Att", "Success", "1st Dn", "20+", "Avg"],
+                lambda s, c: [s["rush_att"], s["rush_yds"],
+                              cell(_f1(s["ybc"] / s["rush_att"]) if s["rush_att"] else "—",
+                                   s["ybc"] / max(1, s["rush_att"])),
+                              cell(_f1((s["rush_yds"] - s["ybc"]) / s["rush_att"]) if s["rush_att"] else "—",
+                                   (s["rush_yds"] - s["ybc"]) / max(1, s["rush_att"])),
+                              cell(f"{s['rush_epa']:+.1f}", s["rush_epa"]),
                               cell(_f2(adv.epa_per_rush(s)), adv.epa_per_rush(s), bold=True),
                               cell(_pct(adv.rush_success(s)), adv.rush_success(s)),
                               s["rush_first"], s["rush_20"], cell(_f1(ypc(s)), ypc(s))]),
@@ -75,13 +81,34 @@ ADV_GROUPS = {
                              cell(f"{s['rec_epa']:+.1f}", s["rec_epa"]),
                              cell(_f2(adv.epa_per_target(s)), adv.epa_per_target(s), bold=True),
                              s["rec_first"], s["drops"]]),
+    "Grades": (["Grade", "Rating", "Snaps"],
+               lambda s, c: [cell(f"{grd.grade_of(s):.1f}" if s["grade_n"] else "—",
+                                  grd.grade_of(s) if s["grade_n"] else -1, bold=True),
+                             grd.label(grd.grade_of(s) if s["grade_n"] else None),
+                             s["off_snaps"] + s["def_snaps"]]),
+    "Blocking": (["Pass Pro", "Press. Allowed", "Sacks Allowed", "Hits Allowed", "Pressure %",
+                  "Run Blocks", "Run Win %", "Pancakes"],
+                 lambda s, c: [s["pb_snaps"], s["pressures_allowed"], s["sacks_allowed"], s["hits_allowed"],
+                               cell(_pct(100.0 * s["pressures_allowed"] / s["pb_snaps"]) if s["pb_snaps"] else "—",
+                                    -s["pressures_allowed"] / max(1, s["pb_snaps"])),
+                               s["rb_snaps"],
+                               cell(_pct(100.0 * s["rb_wins"] / s["rb_snaps"]) if s["rb_snaps"] else "—",
+                                    s["rb_wins"] / max(1, s["rb_snaps"])),
+                               s["pancakes"]]),
     "RunDef": (["Tkl", "Stops", "TFL", "Missed", "Miss %"],
                lambda s, c: [total_tackles(s), cell(s["stops"], s["stops"], bold=True), s["tfl"], s["missed_tkl"],
                              cell(_pct(100.0 * s["missed_tkl"] / max(1, s["missed_tkl"] + total_tackles(s))),
                                   -s["missed_tkl"] / max(1, s["missed_tkl"] + total_tackles(s)))]),
-    "PassRush": (["Pressures", "Sacks", "QB Hits", "TFL", "FF"],
-                 lambda s, c: [cell(s["pressures"], s["pressures"], bold=True),
-                               cell(f"{s['sacks']:g}", s["sacks"]), s["qb_hits"], s["tfl"], s["ff"]]),
+    "PassRush": (["Rushes", "Win %", "Pressures", "Sacks", "QB Hits", "Double-teamed", "Run Stop Win %"],
+                 lambda s, c: [s["pr_snaps"],
+                               cell(_pct(100.0 * s["pr_wins"] / s["pr_snaps"]) if s["pr_snaps"] else "—",
+                                    s["pr_wins"] / max(1, s["pr_snaps"])),
+                               cell(s["pressures"], s["pressures"], bold=True),
+                               cell(f"{s['sacks']:g}", s["sacks"]), s["qb_hits"],
+                               cell(_pct(100.0 * s["double_teamed"] / s["pr_snaps"]) if s["pr_snaps"] else "—",
+                                    s["double_teamed"] / max(1, s["pr_snaps"])),
+                               cell(_pct(100.0 * s["rd_wins"] / s["rd_snaps"]) if s["rd_snaps"] else "—",
+                                    s["rd_wins"] / max(1, s["rd_snaps"]))]),
     "Coverage": (["Tgt", "Cmp", "Cmp%", "Yds", "Y/Tgt", "TD", "Int", "PD", "Rating"],
                  lambda s, c: [s["tgt_allowed"], s["cmp_allowed"],
                                cell(_pct(100.0 * s["cmp_allowed"] / s["tgt_allowed"]) if s["tgt_allowed"] else "—",
@@ -95,15 +122,15 @@ ADV_GROUPS = {
 
 POSITION_GROUPS = {
     "QB": ["Passing", "AdvPass", "Rushing"], "RB": ["Rushing", "AdvRush", "Receiving"],
-    "FB": ["Rushing", "Receiving"], "WR": ["Receiving", "AdvRec", "Rushing"],
-    "TE": ["Receiving", "AdvRec"], "OT": [], "IOL": [], "DT": ["Defense", "PassRush", "RunDef"],
+    "FB": ["Rushing", "Receiving", "Blocking"], "WR": ["Receiving", "AdvRec", "Rushing"],
+    "TE": ["Receiving", "AdvRec", "Blocking"], "OT": ["Blocking"], "IOL": ["Blocking"], "DT": ["Defense", "PassRush", "RunDef"],
     "EDGE": ["Defense", "PassRush", "RunDef"], "LB": ["Defense", "RunDef", "Coverage"],
     "CB": ["Defense", "Coverage"], "S": ["Defense", "RunDef", "Coverage"], "K": ["Kicking"], "P": ["Punting"],
 }
 
 
 def groups_for(player):
-    g = list(POSITION_GROUPS[player.position])
+    g = ["Grades"] + list(POSITION_GROUPS[player.position])
     if player.position not in ("K", "P"):
         g.append("Snaps")
     if player.position in ("RB", "WR", "CB", "S"):
@@ -137,5 +164,7 @@ LEADERBOARDS = {
     "AdvRec": ("Advanced receiving", lambda s, g: s["targets"] >= max(1, g) * 2, "EPA"),
     "PassRush": ("Pass rush", lambda s, g: s["pressures"] >= max(1, g) * 0.8, "Pressures"),
     "RunDef": ("Tackling", lambda s, g: total_tackles(s) >= max(1, g) * 2, "Stops"),
+    "Grades": ("Grades", lambda s, g: s["grade_n"] >= max(1, g) * 25, "Grade"),
+    "Blocking": ("Blocking", lambda s, g: s["pb_snaps"] + s["rb_snaps"] >= max(1, g) * 25, "Pass Pro"),
     "Coverage": ("Coverage", lambda s, g: s["tgt_allowed"] >= max(1, g) * 2.5, "Tgt"),
 }

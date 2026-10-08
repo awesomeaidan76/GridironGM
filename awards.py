@@ -2,6 +2,7 @@
 awards.py — end-of-season awards and All-Pro teams.
 """
 from stats import fantasy_like_value, total_tackles, passer_rating, fg_pct, punt_avg
+from grades import grade_of
 
 OFFENSE = {"QB", "RB", "FB", "WR", "TE", "OT", "IOL"}
 DEFENSE = {"DT", "EDGE", "LB", "CB", "S"}
@@ -22,18 +23,30 @@ def off_score(s, pos):
     return v
 
 
+def _grade_part(s, weight):
+    g = grade_of(s)
+    if g is None:
+        return 0.0
+    # trust a grade more the more snaps it is built on
+    trust = min(1.0, s["grade_n"] / 500.0)
+    return (g - 64.0) * weight * trust
+
+
 def position_score(p, lg):
     s = p.season_stats
     gs = s["gs"]
     if p.position in ("OT", "IOL", "FB"):
+        g = grade_of(s)
+        if g is not None and s["grade_n"] >= 200:
+            return (g - 40) * 3.0 + gs * 2 + p.ca * 0.15
         return p.ca * 0.8 + gs * 4
     if p.position == "K":
         return s["fgm"] * 3 + fg_pct(s) * 1.2 + s["fg_long"] * 0.3 + p.ca * 0.2
     if p.position == "P":
         return punt_avg(s) * 4 + s["punts_in20"] * 1.5 + p.ca * 0.2
     if p.position in DEFENSE:
-        return def_score(s) + p.ca * 0.25
-    return off_score(s, p.position) + p.ca * 0.15
+        return def_score(s) + p.ca * 0.25 + _grade_part(s, 3.0)
+    return off_score(s, p.position) + p.ca * 0.15 + _grade_part(s, 2.5)
 
 
 def _eligible(lg, min_gp=8):

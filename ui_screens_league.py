@@ -180,7 +180,7 @@ def _game_note(g):
 
 BOX_GROUPS = [("Passing", "pass_att"), ("Rushing", "rush_att"), ("Receiving", "targets"),
               ("Defense", None), ("Kicking", "xpa"), ("Punting", "punts"), ("Returns", None),
-              ("Snaps", None)]
+              ("Snaps", None), ("Grades", None)]
 
 
 class GameCenterScreen(Screen):
@@ -325,6 +325,9 @@ class GameCenterScreen(Screen):
                     sel.sort(key=lambda x: -(total_tackles(x[1]) + x[1]["sacks"] * 3 + x[1]["def_int"] * 4))
                 elif group == "Returns":
                     sel = [(pid, l) for pid, l in lines if l["kr"] + l["pr"] > 0]
+                elif group == "Grades":
+                    sel = [(pid, l) for pid, l in lines if l["grade_n"]]
+                    sel.sort(key=lambda x: -(x[1]["grade_pts"] / x[1]["grade_n"]))
                 elif group == "Snaps":
                     sel = [(pid, l) for pid, l in lines if l["off_snaps"] + l["def_snaps"] > 0]
                     sel.sort(key=lambda x: (POSITIONS.index(g.player_meta[x[0]][1]),
@@ -567,7 +570,8 @@ class StandingsScreen(Screen):
 STAT_TABS = [("Passing", "Passing"), ("Rushing", "Rushing"), ("Receiving", "Receiving"),
              ("Defense", "Defense"), ("Kicking", "Kicking"), ("Punting", "Punting"),
              ("Returns", "Returns"), ("AdvPass", "Adv. Passing"), ("AdvRush", "Adv. Rushing"),
-             ("AdvRec", "Adv. Receiving"), ("PassRush", "Pass Rush"), ("RunDef", "Tackling"), ("Coverage", "Coverage"),
+             ("AdvRec", "Adv. Receiving"), ("Grades", "Grades"), ("Blocking", "Blocking"), ("PassRush", "Pass Rush"),
+             ("RunDef", "Tackling"), ("Coverage", "Coverage"),
              ("TeamOff", "Team Offense"), ("TeamDef", "Team Defense"), ("TeamAdv", "Team Advanced")]
 
 
