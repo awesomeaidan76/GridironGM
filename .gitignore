@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+venv/
+saves/
+settings.json
+gridiron_errors.log
+tools/_test_settings.json
+*.zip
