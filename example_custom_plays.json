@@ -1,0 +1,98 @@
+{
+  "about": "Example custom playbook. Copy this file, rename it, and add your own plays. Files in this folder load when the game starts.",
+  "formations": {
+    "Gun Twins Left": {
+      "pers": "11",
+      "qb": -5,
+      "slots": {
+        "X": [
+          -21,
+          -0.5
+        ],
+        "SL": [
+          -14,
+          -1.2
+        ],
+        "Z": [
+          21,
+          -1.2
+        ],
+        "TE": [
+          6.6,
+          -0.6
+        ],
+        "RB": [
+          1.5,
+          -5.2
+        ]
+      }
+    }
+  },
+  "routes": {
+    "whip out": {
+      "cls": "short",
+      "depth": 5,
+      "path": [
+        [
+          0,
+          0
+        ],
+        [
+          -3,
+          4
+        ],
+        [
+          4,
+          5
+        ]
+      ]
+    }
+  },
+  "plays": [
+    {
+      "name": "Twins Whip",
+      "cls": "short",
+      "routes": {
+        "X": "go",
+        "SL": "whip out",
+        "Z": "slant",
+        "TE": "stick",
+        "RB": "flat"
+      },
+      "schemes": {
+        "West Coast": 1.5,
+        "Air Raid": 1.2
+      }
+    },
+    {
+      "name": "Sail-Post",
+      "cls": "medium",
+      "routes": {
+        "X": "post",
+        "SL": "sail",
+        "Z": "dig",
+        "TE": "flat",
+        "RB": "checkdown"
+      },
+      "schemes": {
+        "Pro Style": 1.4
+      }
+    },
+    {
+      "name": "Twins Glance RPO",
+      "cls": "short",
+      "rpo": true,
+      "routes": {
+        "X": "skinny post",
+        "SL": "bubble",
+        "Z": "hitch",
+        "TE": "block",
+        "RB": "block"
+      },
+      "schemes": {
+        "Spread Option": 1.5,
+        "Pistol": 1.3
+      }
+    }
+  ]
+}

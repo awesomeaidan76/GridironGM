@@ -1,0 +1,2933 @@
+"""
+engine.py — the play-by-play match engine.
+
+Every snap is simulated: personnel, play call, pass protection vs. the rush,
+receiver vs. defender matchups, the quarterback's read, completion, yards
+after catch, tackles, penalties, injuries and the game clock. Outcomes come
+from attribute matchups fed through probability curves that were calibrated
+against real NFL league-wide averages, so the stats a league produces are a
+product of the talent in it — better quarterbacks league-wide genuinely
+raise completion rates, weak run-blocking classes genuinely lower yards per
+carry, and so on.
+"""
+import math
+import random
+from collections import Counter
+
+from settings import settings
+from injuries import roll_injury
+import weather as wx
+import committee
+import staff as staff_mod
+import playbook as pb
+import defense as dfn_lib
+import specialteams as st_lib
+import advanced as adv_lib
+
+QUARTER = 900
+
+OFF_POS = {"QB", "RB", "FB", "WR", "TE", "OT", "IOL"}
+DEF_POS = {"DT", "EDGE", "LB", "CB", "S"}
+
+# ── Fatigue ───────────────────────────────────────────────────────────────────
+# Energy runs 0-100. Every snap on the field costs energy (big men and pass
+# rushers burn it fastest); the huddle gives a little back, the sideline a lot.
+# Tired players lose physical sharpness and get hurt more, so coaches rotate.
+DRAIN = {"QB": 0.35, "RB": 1.9, "FB": 1.5, "WR": 1.25, "TE": 1.35, "OT": 0.75, "IOL": 0.75,
+         "DT": 3.0, "EDGE": 2.6, "LB": 1.45, "CB": 1.1, "S": 1.0, "K": 0.0, "P": 0.0}
+HUDDLE_REC = 0.6           # per snap, on the field, normal tempo
+WEAR_FRAC = 0.32           # share of each snap's cost that only halftime (partly) gives back
+SIDELINE_REC = 3.2         # per snap spent on the bench (either team's possession)
+FAT_START = 86.0           # below this energy, attributes start to suffer
+FAT_SLOPE = 0.17           # attribute points lost per point of energy below FAT_START
+PHYSICAL = frozenset([
+    "speed", "acceleration", "agility", "strength", "jumping", "stamina", "throw_power",
+    "break_tackle", "contact_balance", "juke_spin", "stiff_arm", "release", "separation",
+    "run_block", "pass_block", "impact_block", "pulling", "footwork", "power_move", "finesse_move",
+    "block_shedding", "pursuit", "tackling", "hit_power", "man_coverage", "press_technique",
+    "deep_route_running", "kick_power", "punt_power"])
+# How readily coaches rotate a position group (multiplies the cost of fatigue
+# when deciding whether a fresher backup is the better option right now)
+ROTATION_STYLE = {"none": 0.3, "light": 0.65, "normal": 1.0, "heavy": 1.5}
+POS_ROTATION = {"DT": 1.6, "EDGE": 1.6, "LB": 0.8, "CB": 0.55, "S": 0.55, "WR": 0.9, "TE": 0.9,
+                "RB": 1.0, "OT": 0.3, "IOL": 0.3, "QB": 0.0}
+ROT_GROUP = {"DT": "DL", "EDGE": "DL", "LB": "LB", "CB": "DB", "S": "DB", "WR": "WR", "TE": "TE",
+             "RB": "RB", "OT": "OL", "IOL": "OL", "QB": "QB"}
+
+
+def _sig(x):
+    return 1.0 / (1.0 + math.exp(-x))
+
+
+def _clip(v, lo, hi):
+    return lo if v < lo else hi if v > hi else v
+
+
+def _phi(z):
+    return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
+
+
+def _short(name):
+    parts = name.split(" ", 1)
+    return f"{parts[0][0]}. {parts[1]}" if len(parts) == 2 else name
+
+
+# ── Result container ──────────────────────────────────────────────────────────
+
+class GameResult:
+    def __init__(self, home, away, week, season, playoff=None):
+        self.home = home
+        self.away = away
+        self.week = week
+        self.season = season
+        self.playoff = playoff            # None or round name
+        self.home_score = 0
+        self.away_score = 0
+        self.quarters = {home: [0, 0, 0, 0], away: [0, 0, 0, 0]}
+        self.overtime = False
+        self.team_stats = {home: Counter(), away: Counter()}
+        self.player_stats = {}            # pid -> Counter
+        self.player_meta = {}             # pid -> (name, pos, team, jersey)
+        self.plays = []                   # (q, clock, team, situation, text, kind)
+        self.scoring = []                 # (q, clock, team, text, home, away)
+        self.drives = {home: [], away: []}
+        self.injuries = []                # (pid, name, team, injury name, weeks)
+        self.starters = set()
+        self.weather = None               # dict from weather.roll_weather
+        # Parallel to plays: (offense yard line, down, to go, home score, away score,
+        #                     home win prob x1000, momentum x100, home has ball)
+        self.states = []
+        self.diagrams = []                # parallel to plays: play diagram dict or None
+
+    @property
+    def winner(self):
+        if self.home_score > self.away_score:
+            return self.home
+        if self.away_score > self.home_score:
+            return self.away
+        return None
+
+    @property
+    def loser(self):
+        w = self.winner
+        if w is None:
+            return None
+        return self.away if w == self.home else self.home
+
+    def score_of(self, abbr):
+        return self.home_score if abbr == self.home else self.away_score
+
+    def opponent(self, abbr):
+        return self.away if abbr == self.home else self.home
+
+    def summary(self):
+        ot = " (OT)" if self.overtime else ""
+        return f"{self.away} {self.away_score} @ {self.home} {self.home_score}{ot}"
+
+
+# ── Per-team game state ───────────────────────────────────────────────────────
+
+class Side:
+    def __init__(self, team, is_home, sim):
+        self.team = team
+        self.abbr = team.abbr
+        self.is_home = is_home
+        self.plan = team.gameplan()
+        self.score = 0
+        self.timeouts = 3
+        self.sim = sim
+        self.disc = team.discipline
+        self.refresh_lineup()
+
+    def refresh_lineup(self):
+        t = self.team
+        self.lu = {
+            "QB": t.lineup("QB", 2), "RB": t.lineup("RB", 3), "FB": t.lineup("FB", 1),
+            "WR": t.lineup("WR", 5), "TE": t.lineup("TE", 3), "OT": t.lineup("OT", 2),
+            "IOL": t.lineup("IOL", 3), "DT": t.lineup("DT", 4),
+            "EDGE": t.lineup("EDGE", 4), "LB": t.lineup("LB", 4),
+            "CB": t.lineup("CB", 4), "S": t.lineup("S", 3), "K": t.lineup("K", 1),
+            "P": t.lineup("P", 1),
+        }
+        self.kr = t.returner("KR")
+        self.pr = t.returner("PR")
+        self.ol = self.lu["OT"][:1] + self.lu["IOL"][:3] + self.lu["OT"][1:2]
+        self._backfield()
+
+    def _backfield(self):
+        """
+        How this team splits the backfield today: the lead back's base share of
+        snaps, plus situational specialists (a third-down back who catches and
+        protects, a short-yardage hammer). Coach philosophy, the talent gap
+        between backs, stamina and archetype all matter.
+        """
+        rbs = self.lu["RB"]
+        self.rb1_streak = getattr(self, "rb1_streak", 0)
+        if not rbs:
+            self.bf = None
+            return
+        rb1 = rbs[0]
+        rb2 = rbs[1] if len(rbs) > 1 else None
+        c = self.plan.get("committee", 0.45)
+        share = 0.99 - 0.30 * c
+        if rb2 is not None:
+            gap = rb1.rating_at("RB") - rb2.rating_at("RB")
+            share += max(-0.14, min(0.16, gap / 65.0))
+        share += (rb1.a("stamina") - 72) / 240.0
+        share += {"Workhorse": 0.08, "Power Back": 0.02, "Elusive Back": -0.02,
+                  "Receiving Back": -0.09}.get(rb1.archetype, 0.0)
+        share = max(0.42, min(0.93, share))
+
+        def recv(p):
+            return p.a("catching") * 0.4 + p.a("short_route_running") * 0.3 + p.a("pass_block") * 0.3
+
+        def power(p):
+            return p.a("strength") * 0.3 + p.a("break_tackle") * 0.35 + p.a("contact_balance") * 0.35
+
+        top = rbs[:3]
+        third = max(top, key=recv)
+        if third is rb1 or recv(third) < recv(rb1) + 6:
+            third = None
+        goal = max(top, key=power)
+        if goal is rb1 or power(goal) < power(rb1) + 5:
+            goal = None
+        self.bf = {"rb1": rb1, "rb2": rb2, "rb3": rbs[2] if len(rbs) > 2 else None,
+                   "share": share, "third": third, "goal": goal, "committee": c}
+
+    @property
+    def qb(self):
+        if len(self.lu["QB"]) > 1 and self.sim._garbage(self):
+            return self.lu["QB"][1]          # mop-up duty in a blowout
+        return self.lu["QB"][0]
+
+
+# ── The simulation ────────────────────────────────────────────────────────────
+
+class GameSim:
+    def __init__(self, home, away, week=0, season=0, playoff=None,
+                 neutral=False, keep_pbp=True, rules=None, diagrams=False):
+        self.res = GameResult(home.abbr, away.abbr, week, season, playoff)
+        self.home = Side(home, True, self)
+        self.away = Side(away, False, self)
+        self.playoff = playoff
+        self.neutral = neutral
+        self.keep_pbp = keep_pbp
+
+        self.rand_scale = settings["game_randomness"]
+        self.to_rate = settings["turnover_rate"]
+        self.sack_mult = settings["sack_rate"]
+        self.big_play = settings["big_play_rate"]
+        self.pen_rate = settings["penalty_rate"]
+        self.fg_mult = settings["fg_accuracy"]
+        self.inj_rate = settings["injury_rate"]
+        self.go_mult = settings["fourth_down_aggression"]
+        self.pat_dist = settings["pat_distance"]
+        self.pass_shift = (settings["pass_tendency"] - 1.0) * 0.30
+        self.pace = settings["pace"]
+        self.comp_mult = settings["completion_rate"]
+        self.run_mult = settings["run_efficiency"]
+        self.rx = committee.effects(rules)
+        self.diagrams = diagrams and keep_pbp
+        self.cur_diag = None
+        self.dcall = None
+        self.st_def = None
+        self._st_units = {}
+        self.energy = {}                # pid -> 0..100
+        self.wear = {}                  # pid -> fatigue that builds over the game
+        self._rec = {}                  # pid -> sideline recovery per snap
+        self._fat_slope = FAT_SLOPE * settings.get("fatigue_effect", 1.0)
+        self._fat_rate = settings.get("fatigue_rate", 1.0)
+        self.fat = {}                   # pid -> attribute penalty from fatigue
+        self._rat = {}                  # (pid, pos) -> rating, cached for rotation decisions
+        self.no_huddle = False
+
+        self.weather = wx.roll_weather(home.abbr, week, playoff, neutral) \
+            if settings["weather"] else None
+        self.res.weather = self.weather
+        self.wx = wx.effects(self.weather)
+        self.mom = 0.0                  # >0 favours the home side, range -1..1
+        self.mom_scale = settings["momentum"]
+        self.mom_sens = {}              # pid -> signed sensitivity to momentum
+        self.mom_pts = 0.0
+
+        # Weekly game plans: each defensive coordinator scouts the opponent
+        self.gstats = {home.abbr: Counter(), away.abbr: Counter()}
+        self._spy_on = False
+        self._ocall = None
+        for side, opp in ((self.home, self.away), (self.away, self.home)):
+            side.dgp = dfn_lib.scout(side.team, opp.team, opp.plan, calling=staff_mod.def_calling(side.team))
+            side.dadj = {}
+            side.oshift = 0.0
+        self.res.gameplans = {self.home.abbr: self.home.dgp, self.away.abbr: self.away.dgp}
+
+        self.form = {}
+        self._build_form(self.home, home_edge=True)
+        self._build_form(self.away, home_edge=False)
+        # Pre-game strength edge in points (for the win-probability model)
+        hfa_pts = 1.6 * settings["home_field_strength"] \
+            if settings["home_field_advantage"] and not neutral else 0.0
+        self.pre_edge = (home.overall - away.overall) * 0.68 + hfa_pts
+        self.res.pre_edge = self.pre_edge
+
+        self.quarter = 1
+        self.clock = QUARTER
+        self.poss = None
+        self.dfn = None
+        self.yl = 25
+        self.down = 1
+        self.togo = 10
+        self.tmw = {2: False, 4: False}
+        self.drive = None
+        self.ot_possessions = set()
+        self.game_over = False
+
+    # ── Setup ────────────────────────────────────────────────────────────────
+
+    def _build_form(self, side, home_edge):
+        """
+        Game-day form. Consistent players perform close to their attributes;
+        inconsistent ones swing. Morale, coaching and home field shift
+        everyone a little; big-game players rise in the playoffs.
+        """
+        team = side.team
+        hfa = 0.0
+        if settings["home_field_advantage"] and not self.neutral:
+            hfa = 0.45 * settings["home_field_strength"] * (1 if home_edge else -0.4)
+        morale = (team.team_morale - 60) / 40.0
+        motivation = (team.coach.r("motivation") - 10) * 0.12
+        # Leadership: the two strongest voices in the locker room lift everyone a little
+        leaders = sorted((p.attrs.get("leadership", 40) for p in self._starter_list(side)), reverse=True)[:2]
+        lead = (sum(leaders) / max(1, len(leaders)) - 70) / 30.0 * 0.6
+        side.leadership = sum(leaders) / max(1, len(leaders))
+        streak = _clip(settings["streakiness"], 0.0, 2.0)
+        # Form carries over between games (hot and cold streaks): an AR(1)
+        # process keeps the long-run spread the same while making good and bad
+        # spells cluster together.
+        rho = _clip(0.42 * streak, 0.0, 0.85)
+        keep = math.sqrt(1.0 - rho * rho)
+        rho_u = _clip(0.50 * streak, 0.0, 0.85)
+        keep_u = math.sqrt(1.0 - rho_u * rho_u)
+        prev_unit = getattr(team, "unit_form", None) or {}
+        unit = {}
+        for k in ("off", "def"):
+            unit[k] = rho_u * prev_unit.get(k, 0.0) + keep_u * random.gauss(0, 1.55 * self.rand_scale)
+        team.unit_form = unit
+        sign = 1.0 if side.is_home else -1.0
+        for p in team.roster:
+            cons = p.hidden.get("consistency", 50)
+            sd = (1.2 + (100 - cons) / 100.0 * 5.5) * self.rand_scale
+            personal = rho * getattr(p, "form_carry", 0.0) + keep * random.gauss(0, sd)
+            p.form_carry = personal
+            p.form_z = personal / sd if sd > 0 else 0.0
+            u = unit["off"] if p.position in OFF_POS else unit["def"] if p.position in DEF_POS else 0.0
+            f = personal + u + hfa + morale + motivation + lead
+            if self.playoff:
+                f += (p.hidden.get("big_game", 50) - 50) / 50.0 * 2.5
+            self.form[p.id] = f
+            temper = p.hidden.get("temperament", 50)
+            steady = (getattr(side, "leadership", 70) - 70) / 100.0
+            self.mom_sens[p.id] = sign * (1.35 - temper / 100.0 * 0.8) * (1.0 - steady * 0.6)
+        self.res.starters.update(pl.id for pl in self._starter_list(side))
+
+    def _starter_list(self, side):
+        lu = side.lu
+        out = lu["QB"][:1] + lu["RB"][:1] + lu["WR"][:3] + lu["TE"][:1] + side.ol
+        out += lu["DT"][:2] + lu["EDGE"][:2] + lu["LB"][:2] + lu["CB"][:3] + lu["S"][:2]
+        out += lu["K"][:1] + lu["P"][:1]
+        return out
+
+    def e(self, p, attr):
+        """Effective attribute for this game (talent + form + momentum - fatigue)."""
+        v = p.attrs.get(attr, 30) + self.form.get(p.id, 0.0) + \
+            self.mom_sens.get(p.id, 0.0) * self.mom_pts
+        pen = self.fat.get(p.id)
+        if pen:
+            v -= pen if attr in PHYSICAL else pen * 0.3
+        return v
+
+    # ── Fatigue & rotation ───────────────────────────────────────────────────
+
+    def energy_of(self, p):
+        return self.energy.get(p.id, 100.0)
+
+    def _set_energy(self, p, v):
+        self._set_en(p.id, v)
+
+    def _set_en(self, pid, v):
+        v = 0.0 if v < 0.0 else 100.0 if v > 100.0 else v
+        self.energy[pid] = v
+        if v < FAT_START:
+            self.fat[pid] = (FAT_START - v) * self._fat_slope
+        else:
+            self.fat.pop(pid, None)
+
+    def _garbage(self, side):
+        """Blowout late in the game: starters come out."""
+        if self.quarter < 4 or self.clock > 420 or self.quarter > 4:
+            return False
+        return abs(side.score - self.other(side).score) >= 24
+
+    def _rating(self, p, pos):
+        key = (p.id, pos)
+        r = self._rat.get(key)
+        if r is None:
+            r = p.rating_at(pos)
+            self._rat[key] = r
+        return r
+
+    def _value(self, side, p, pos, k):
+        en = self.energy_of(p)
+        return self._rating(p, pos) * (1.0 - k * max(0.0, 94.0 - en) / 100.0 * 1.15)
+
+    def _rotate(self, side, pos, n, lock=False):
+        """The n players a position group puts on the field this snap (starters first)."""
+        pool = side.lu.get(pos, [])
+        out = list(pool[:n])
+        if len(pool) <= n:
+            return out
+        bench = list(pool[n:n + 3])
+        if self._garbage(side):
+            # mop-up time: the backups play
+            return (bench + out)[:n] if pos != "QB" else out
+        if lock:
+            return out
+        style = (getattr(side.team, "rotation", None) or {}).get(ROT_GROUP.get(pos, ""), "normal")
+        k = POS_ROTATION.get(pos, 0.8) * ROTATION_STYLE.get(style, 1.0)
+        if k <= 0:
+            return out
+        val = {p.id: self._value(side, p, pos, k) for p in out + bench}
+        for i, s in enumerate(out):
+            if not bench:
+                break
+            b = max(bench, key=lambda x: val[x.id])
+            if val[b.id] > val[s.id] * 1.03:
+                out[i] = b
+                bench.remove(b)
+                bench.append(s)
+        return out
+
+    def _snap_units(self, off_players, def_players):
+        """Everyone on the field takes a snap: snap counts, energy drain, sideline recovery."""
+        heat = 1.0
+        if self.weather:
+            t = self.weather.get("temp", 60)
+            heat = 1.22 if t >= 88 else 1.1 if t >= 80 else 0.95 if t <= 35 else 1.0
+        rate = self._fat_rate
+        huddle = HUDDLE_REC * (0.35 if self.no_huddle else 1.0)
+        on = set()
+        ps = self.res.player_stats
+        for players, key in ((off_players, "off_snaps"), (def_players, "def_snaps")):
+            for p in players:
+                if p is None or p.id in on:
+                    continue
+                on.add(p.id)
+                line = ps.get(p.id)
+                if line is None:
+                    self.st(p, key)
+                else:
+                    line[key] += 1
+                stam = p.attrs.get("stamina", 60)
+                cost = DRAIN.get(p.position, 1.0) * (1.55 - stam / 100.0) * heat * rate
+                self.wear[p.id] = self.wear.get(p.id, 0.0) + cost * WEAR_FRAC
+                if p.id not in self._rec:
+                    self._rec[p.id] = SIDELINE_REC * (0.7 + p.a("stamina") / 250.0)
+                self._set_en(p.id, min(100.0 - self.wear[p.id], self.energy_of(p) - cost + huddle))
+        wear = self.wear
+        for pid, en in list(self.energy.items()):
+            if pid in on:
+                continue
+            cap = 100.0 - wear.get(pid, 0.0)
+            if en < cap:
+                self._set_en(pid, min(cap, en + self._rec.get(pid, SIDELINE_REC)))
+        self._on_field = on
+
+    def _adjustments(self, halftime):
+        """Coordinators adjust to what is working (halftime adjustments are the big ones)."""
+        for side in (self.home, self.away):
+            opp = self.other(side)
+            calling = staff_mod.def_calling(side.team)
+            if not halftime:
+                calling *= 0.5
+            side.dadj, note = dfn_lib.adjust(side.dadj, self.gstats[opp.abbr], calling,
+                                             side.team.coach.r("adaptability"))
+            if note and halftime:
+                self.log(f"Halftime adjustment: the {side.team.name} "
+                         f"defense {note}", "note")
+            # Offence: lean toward what's working
+            g = self.gstats[side.abbr]
+            if g["run_n"] >= 6 and g["pass_n"] >= 8:
+                gap = g["pass_epa"] / g["pass_n"] - g["run_epa"] / g["run_n"]
+                q = staff_mod.off_calling(side.team) / 20.0 * (1.0 if halftime else 0.5)
+                side.oshift = _clip(side.oshift + _clip(gap, -0.3, 0.3) * 0.15 * q, -0.08, 0.08)
+
+    def _exert(self, p, yards=0):
+        """Extra cost for the ball carrier or a receiver who ran after the catch."""
+        if p is not None:
+            self._set_energy(p, self.energy_of(p) - 0.6 - max(0, yards) * 0.05)
+
+    def _rest_all(self, amount):
+        for pid in list(self.energy):
+            self._set_en(pid, min(100.0 - self.wear.get(pid, 0.0), self.energy[pid] + amount))
+
+    # ── Momentum & win probability ───────────────────────────────────────────
+
+    def swing(self, side, amount):
+        """Shift momentum toward `side`. Big swings fade over a dozen snaps."""
+        if self.mom_scale <= 0 or side is None:
+            return
+        sign = 1.0 if side is self.home else -1.0
+        crowd = 1.15 if (side.is_home and settings["home_field_advantage"] and not self.neutral) else 1.0
+        # Diminishing returns when you already own the momentum
+        delta = sign * amount * crowd * (1.0 - 0.5 * max(0.0, sign * self.mom))
+        self.mom = _clip(self.mom + delta, -1.0, 1.0)
+        self.mom_pts = self.mom * 1.6 * self.mom_scale
+
+    def elapsed(self):
+        if self.quarter > 4:
+            return 3600.0
+        return (self.quarter - 1) * QUARTER + (QUARTER - max(0, self.clock))
+
+    def win_prob_home(self):
+        if self.game_over or (self.quarter >= 4 and self.clock <= 0):
+            d = self.home.score - self.away.score
+            return 1.0 if d > 0 else 0.0 if d < 0 else 0.5
+        rem = max(1.0, 3600.0 - self.elapsed()) if self.quarter <= 4 else 420.0
+        diff = self.home.score - self.away.score
+        if self.poss is not None:
+            ep = -0.6 + 0.068 * self.yl
+            diff += ep if self.poss is self.home else -ep
+        sd = 13.4 * math.sqrt(rem / 3600.0) + 0.6
+        return _clip(_phi((diff + self.pre_edge * rem / 3600.0) / sd), 0.001, 0.999)
+
+    # ── Bookkeeping ──────────────────────────────────────────────────────────
+
+    def st(self, p, key, val=1):
+        if p is None:
+            return
+        line = self.res.player_stats.get(p.id)
+        if line is None:
+            line = Counter()
+            self.res.player_stats[p.id] = line
+            self.res.player_meta[p.id] = (p.name, p.position, p.team, p.jersey)
+        if key.endswith("_long"):
+            if val > line[key]:
+                line[key] = val
+        else:
+            line[key] += val
+
+    def ts(self, side, key, val=1):
+        self.res.team_stats[side.abbr][key] += val
+
+    def spot(self, yl=None, side=None):
+        yl = self.yl if yl is None else yl
+        side = side or self.poss
+        other = self.dfn if side is self.poss else self.poss
+        if yl == 50:
+            return "midfield"
+        if yl < 50:
+            return f"{side.abbr} {yl}"
+        return f"{other.abbr} {100 - yl}"
+
+    def clock_str(self, clock=None):
+        c = max(0, int(self.clock if clock is None else clock))
+        return f"{c // 60}:{c % 60:02d}"
+
+    def log(self, text, kind="play"):
+        if not self.keep_pbp:
+            return
+        d = {1: "1st", 2: "2nd", 3: "3rd", 4: "4th"}.get(self.down, "")
+        if kind in ("play",):
+            togo = "Goal" if self.yl + self.togo >= 100 else str(self.togo)
+            sit = f"{d} & {togo} at {self.spot()}"
+        else:
+            sit = ""
+        q = f"Q{self.quarter}" if self.quarter <= 4 else "OT"
+        self.res.plays.append((q, self.clock_str(), self.poss.abbr if self.poss else "",
+                               sit, text, kind))
+        self.res.states.append((self.yl, self.down, self.togo, self.home.score, self.away.score,
+                                int(self.win_prob_home() * 1000), int(self.mom * 100),
+                                self.poss is self.home))
+        diag = None
+        if self.diagrams and kind == "play" and self.cur_diag is not None:
+            diag = self.cur_diag
+            diag["los"] = self.yl
+            diag["home"] = self.poss is self.home
+            self.cur_diag = None
+        self.res.diagrams.append(diag)
+
+    def add_score(self, side, pts, text):
+        side.score += pts
+        if side is self.home:
+            self.res.home_score = side.score
+        else:
+            self.res.away_score = side.score
+        qi = min(self.quarter, 5) - 1
+        q = self.res.quarters[side.abbr]
+        while len(q) <= qi:
+            q.append(0)
+        q[qi] += pts
+        qn = f"Q{self.quarter}" if self.quarter <= 4 else "OT"
+        self.res.scoring.append((qn, self.clock_str(), side.abbr, text,
+                                 self.home.score, self.away.score))
+        self.swing(side, {6: 0.30, 3: 0.08, 2: 0.22}.get(pts, 0.0))
+        self.log(f"{text}  [{self.away.abbr} {self.away.score} - "
+                 f"{self.home.abbr} {self.home.score}]", "score")
+
+    def other(self, side):
+        return self.away if side is self.home else self.home
+
+    # ── Clock ────────────────────────────────────────────────────────────────
+
+    def urgency(self, side):
+        """'hurry', 'milk' or 'normal' for the offence."""
+        diff = side.score - self.other(side).score
+        if self.quarter == 2 and self.clock <= 120:
+            return "hurry"
+        if self.quarter >= 4:
+            if diff < 0 and (self.clock <= 300 or diff < -8 and self.clock <= 480):
+                return "hurry"
+            if diff == 0 and (self.clock <= 120 or (self.quarter >= 5 and self.clock <= 300)):
+                return "hurry"
+            if diff > 0 and self.clock <= 420:
+                return "milk"
+        return "normal"
+
+    def run_clock(self, play_time, clock_runs, oob=False):
+        start = self.clock
+        mode = self.urgency(self.poss)
+        elapsed = play_time
+        if clock_runs:
+            if oob and not ((self.quarter == 2 and self.clock <= 120) or
+                            (self.quarter >= 4 and self.clock <= 300)):
+                clock_runs_after = True
+                between = random.uniform(14, 22)
+            elif oob:
+                clock_runs_after = False
+                between = 0
+            else:
+                clock_runs_after = True
+                tempo = self.poss.plan["tempo"]
+                if mode == "hurry":
+                    between = random.uniform(11, 17)
+                elif mode == "milk":
+                    between = random.uniform(37, 40)
+                else:
+                    between = random.gauss(38.0 - 9.0 * (tempo - 0.5), 2.0) / self.pace
+            if clock_runs_after and between > 0:
+                # Timeouts to stop the clock
+                if mode == "hurry" and self.poss.timeouts > 0 and \
+                        self.clock - elapsed <= 90 and self.quarter in (2, 4, 5):
+                    self.poss.timeouts -= 1
+                    self._rest_all(2.5)
+                    self.log(f"Timeout {self.poss.abbr}", "note")
+                    between = 0
+                elif self._defense_wants_timeout():
+                    self.dfn.timeouts -= 1
+                    self._rest_all(2.5)
+                    self.log(f"Timeout {self.dfn.abbr}", "note")
+                    between = 0
+            elapsed += between
+        self.clock -= elapsed
+        # Two-minute warning
+        if self.quarter in (2, 4) and not self.tmw[self.quarter] \
+                and start > 120 >= self.clock:
+            self.tmw[self.quarter] = True
+            if self.clock < 120 - play_time:
+                self.clock = 120
+            self.log("Two-minute warning", "note")
+        self.ts(self.poss, "top", min(elapsed, start))
+
+    def _defense_wants_timeout(self):
+        if self.dfn.timeouts <= 0 or self.quarter < 4:
+            return False
+        diff = self.dfn.score - self.poss.score
+        return diff < 0 and diff >= -16 and self.clock <= 180
+
+    # ── Main loop ────────────────────────────────────────────────────────────
+
+    def play(self):
+        first_receiver = random.choice([self.home, self.away])
+        second_half_receiver = self.other(first_receiver)
+        self.kickoff(self.other(first_receiver))
+        while not self.game_over:
+            if self.clock <= 0:
+                if not self._end_quarter(second_half_receiver):
+                    break
+                continue
+            self.snap()
+        self._finish()
+        return self.res
+
+    def _end_quarter(self, second_half_receiver):
+        if self.quarter in (1, 3):
+            self._adjustments(halftime=False)
+            self.quarter += 1
+            self.clock = QUARTER
+            self._rest_all(4.0)
+            self.log(f"End of quarter {self.quarter - 1}", "note")
+            return True
+        if self.quarter == 2:
+            self._adjustments(halftime=True)
+            for pid in self.wear:
+                self.wear[pid] *= 0.45
+            self._rest_all(45.0)
+            self._end_drive("End of half")
+            self.quarter = 3
+            self.clock = QUARTER
+            self.home.timeouts = self.away.timeouts = 3
+            self.log("Halftime", "note")
+            self.kickoff(self.other(second_half_receiver))
+            return True
+        # End of regulation / overtime period
+        if self.home.score != self.away.score:
+            self._end_drive("End of game")
+            return False
+        rules = settings["overtime_rules"]
+        if self.quarter >= 5 and not self.playoff:
+            self._end_drive("End of game")
+            return False          # regular season tie
+        if self.quarter >= 9:
+            self._end_drive("End of game")
+            return False
+        self._end_drive("End of regulation" if self.quarter == 4 else "End of period")
+        self.quarter += 1
+        self.res.overtime = True
+        self.clock = 600 if (not self.playoff and rules == "modern") else QUARTER
+        self.home.timeouts = self.away.timeouts = 2
+        self.ot_possessions = set()
+        self.log("Overtime", "note")
+        self.kickoff(random.choice([self.home, self.away]))
+        return True
+
+    def _ot_check(self):
+        """Apply sudden-death rules after any score in overtime."""
+        if self.quarter < 5:
+            return
+        rules = settings["overtime_rules"]
+        if rules == "full period":
+            return
+        if self.home.score == self.away.score:
+            return
+        if rules == "sudden death":
+            self.game_over = True
+            return
+        # Modern: both teams get a possession, then sudden death
+        if len(self.ot_possessions) >= 2:
+            self.game_over = True
+
+    # ── Drives ───────────────────────────────────────────────────────────────
+
+    def _start_drive(self, side, yl):
+        self.poss = side
+        self.dfn = self.other(side)
+        self.yl = yl
+        self.down = 1
+        self.togo = 10
+        if self.quarter >= 5:
+            if settings["overtime_rules"] == "modern" and len(self.ot_possessions) >= 2 \
+                    and self.home.score != self.away.score:
+                self.game_over = True
+            self.ot_possessions.add(side.abbr)
+        side.rb1_streak = 0
+        self.drive = {"team": side.abbr, "start": yl, "plays": 0, "yards": 0,
+                      "clock": self.clock, "quarter": self.quarter, "result": "",
+                      "rz": False}
+        self.ts(side, "drives")
+
+    def _end_drive(self, result):
+        d = self.drive
+        if not d or d.get("result"):
+            return
+        d["result"] = result
+        d["end"] = self.yl
+        side = self.home if d["team"] == self.home.abbr else self.away
+        self.res.drives[side.abbr].append(d)
+
+    def turnover_on_spot(self, result, new_yl=None):
+        self._end_drive(result)
+        old = self.poss
+        yl = 100 - self.yl if new_yl is None else new_yl
+        self._start_drive(self.other(old), _clip(yl, 1, 99))
+
+    # ── Kicks ────────────────────────────────────────────────────────────────
+
+    # ── Special teams units ──────────────────────────────────────────────────
+
+    def _st_unit(self, side):
+        """Core special-teams players: the backups at linebacker, safety, corner, tight end and back."""
+        v = self._st_units.get(side.abbr)
+        if v is None:
+            lu = side.lu
+            core = lu["LB"][2:5] + lu["S"][2:4] + lu["CB"][3:5] + lu["TE"][1:3] + lu["RB"][1:3] + lu["WR"][4:6]
+            core = core or (lu["LB"] + lu["S"])
+            v = sum(p.a("speed") * 0.30 + p.a("tackling") * 0.20 + p.a("pursuit") * 0.15
+                    + p.a("strength") * 0.15 + p.a("awareness") * 0.20 for p in core) / max(1, len(core))
+            v += (staff_mod.st_calling(side.team) - 10) * 0.4
+            self._st_units[side.abbr] = v
+        return v
+
+    def _st_edge(self, ret_side, cover_side):
+        """Positive when the return unit is better than the coverage unit (about -2..+2)."""
+        return _clip((self._st_unit(ret_side) - self._st_unit(cover_side)) / 6.0, -2.5, 2.5)
+
+    def _st_cover_tackle(self, side):
+        lu = side.lu
+        pool = lu["LB"][2:5] + lu["S"][2:4] + lu["CB"][3:5] + lu["TE"][1:2] or lu["LB"]
+        if pool:
+            self.st(random.choice(pool), "st_tkl")
+
+    def _st_def_call(self, kind):
+        de, off = self.dfn, self.poss
+        prefs = getattr(de.team, "play_prefs", None)
+        if kind == "punt":
+            sit = {"togo": self.togo, "to_goal": 100 - self.yl, "fake_threat": off.plan.get("trick", 0.4)}
+            return st_lib.choose_punt_return(sit, prefs)
+        diff = de.score - off.score
+        sit = {"togo": self.togo, "must_stop": self.quarter >= 4 and self.clock < 120 and -3 <= diff <= 2}
+        return st_lib.choose_fg_defense(sit, prefs)
+
+    def kickoff(self, kicking, onside=False, from_yl=35):
+        recv = self.other(kicking)
+        self.poss, self.dfn = kicking, recv
+        k = kicking.lu["K"][0]
+        needed = onside or (self.quarter == 4 and self.clock < 150 and 0 < recv.score - kicking.score <= 16)
+        ret = recv.kr
+        kind = st_lib.choose_kickoff({"onside_needed": needed,
+                                      "late_half": self.quarter in (2, 4) and self.clock <= 25,
+                                      "aggression": kicking.team.coach.tendencies.get("aggression", 0.45),
+                                      "lead": kicking.score - recv.score,
+                                      "returner": ret.return_rating if ret is not None else 75},
+                                     getattr(kicking.team, "play_prefs", None))
+        self.st(k, "ko")
+        if kind in ("Onside Kick", "Surprise Onside"):
+            hands = sum(self.e(p, "catching") * 0.5 + self.e(p, "awareness") * 0.5
+                        for p in (recv.lu["WR"][:3] + recv.lu["TE"][:1] + recv.lu["RB"][:1])) / 5.0
+            rec_chance = 0.10 if kind == "Onside Kick" else 0.48
+            rec_chance += (self.e(k, "kick_accuracy") - 75) / 600.0 - (hands - 70) / 700.0
+            what = "onside kick" if kind == "Onside Kick" else "SURPRISE onside kick"
+            if random.random() < _clip(rec_chance, 0.03, 0.65):
+                self.log(f"{_short(k.name)} {what} RECOVERED by {kicking.abbr}!", "note")
+                self.swing(kicking, 0.25)
+                self._start_drive(kicking, from_yl + 11)
+                return
+            self.log(f"{_short(k.name)} {what} recovered by {recv.abbr}", "note")
+            self._start_drive(recv, 100 - (from_yl + 10))
+            return
+        power = self.e(k, "kick_power") + self.wx["kick_power"]
+        dist = random.gauss(57 + (power - 70) * 0.35, 4.5)
+        tb_p = _clip((power - 66) / 45.0, 0.0, 0.85)
+        if kind == "Directional Kickoff":
+            dist -= 1.5
+            tb_p *= 0.65
+            if random.random() < 0.015 + max(0, 75 - self.e(k, "kick_accuracy")) / 600.0:
+                self.log(f"{_short(k.name)} directional kick goes OUT OF BOUNDS.", "note")
+                self.ts(kicking, "ko_oob")
+                self._start_drive(recv, 40)
+                return
+        elif kind == "Squib Kick":
+            dist, tb_p = random.gauss(41, 5), 0.0
+        elif kind == "Pooch Kick":
+            dist, tb_p = random.gauss(52, 3.5), 0.0
+        land = from_yl + dist          # yards from kicking team's goal
+        if land >= 100 + random.uniform(0, 3) or random.random() < tb_p:
+            self.st(k, "ko_tb")
+            self.log(f"{_short(k.name)} kicks off. Touchback.", "note")
+            self._start_drive(recv, self.rx["touchback"])
+            return
+        catch_at = max(-4, int(100 - land))          # receiving team yard line
+        if kind == "Pooch Kick" and random.random() < 0.55:
+            self.log(f"{_short(k.name)} pooch kick, fair catch by {_short(ret.name)}.", "note")
+            self._start_drive(recv, self.rx["touchback"])
+            return
+        scheme = st_lib.choose_kick_return(getattr(recv.team, "play_prefs", None))
+        mean_adj, sd, big = {"Middle Return": (0.0, 6.0, 1.0), "Sideline Wall": (-0.5, 6.5, 1.3),
+                             "Wedge Return": (1.0, 5.0, 0.7), "Kickoff Reverse": (-2.5, 9.0, 2.4)}[scheme]
+        if kind == "Directional Kickoff":
+            mean_adj -= 2.5
+        elif kind == "Squib Kick":
+            mean_adj -= 10.0
+            big *= 0.4
+        elif kind == "Pooch Kick":
+            mean_adj -= 6.0
+        edge = self._st_edge(recv, kicking)
+        rr = ret.return_rating + self.form.get(ret.id, 0)
+        gain = max(0, int(random.gauss(21 + (rr - 75) * 0.25 + mean_adj + edge * 1.2, sd)))
+        if random.random() < (0.0048 + max(0, rr - 78) * 0.0005) * self.big_play * big * (1 + 0.15 * edge):
+            gain = 100 - catch_at
+        yl = catch_at + gain
+        self.st(ret, "kr")
+        if yl >= 100:
+            self.st(ret, "kr_yds", 100 - catch_at)
+            self.st(ret, "kr_td")
+            self.st(ret, "kr_long", 100 - catch_at)
+            self._start_drive(recv, 99)
+            self.add_score(recv, 6, f"{_short(ret.name)} {100 - catch_at}-yard kickoff return TOUCHDOWN")
+            self._after_td(recv)
+            return
+        yl = max(1, yl)
+        self.st(ret, "kr_yds", yl - catch_at)
+        self.st(ret, "kr_long", yl - catch_at)
+        self._st_cover_tackle(kicking)
+        fum = 0.006 * (2.0 if scheme == "Kickoff Reverse" else 1.0) * (1.6 if kind == "Squib Kick" else 1.0)
+        if random.random() < fum * self.to_rate:
+            self.st(ret, "fumbles")
+            self.st(ret, "fumbles_lost")
+            self.log(f"{_short(ret.name)} FUMBLES the kickoff return — {kicking.abbr} recovers!", "note")
+            self._start_drive(kicking, 100 - yl)
+            return
+        how = {"Squib Kick": "squib kicks", "Directional Kickoff": "kicks toward the sideline",
+               "Pooch Kick": "pooch kicks"}.get(kind, "kicks off")
+        extra = {"Kickoff Reverse": " on a reverse", "Sideline Wall": " behind a sideline wall"}.get(scheme, "") \
+            if gain >= 30 else ""
+        self.log(f"{_short(k.name)} {how}. {_short(ret.name)} returns{extra} to the "
+                 f"{recv.abbr} {yl}.", "note")
+        self._start_drive(recv, yl)
+
+    def punt(self):
+        p = self.poss.lu["P"][0]
+        ret = self.dfn.pr
+        rcall = self.st_def or self._st_def_call("punt")
+        self.st_def = None
+        to_goal = 100 - self.yl
+        kind = st_lib.choose_punt({"to_goal": to_goal, "wind": (self.weather or {}).get("wind", 0)},
+                                  getattr(self.poss.team, "play_prefs", None))
+        self.ts(self.poss, "punts")
+        block_p = {"Punt Block": 0.022, "Punt Safe": 0.002}.get(rcall, 0.004)
+        if kind == "Rugby Punt":
+            block_p *= 0.5
+        if random.random() < block_p * (1 + 0.2 * self._st_edge(self.dfn, self.poss)):
+            self.st(p, "punts")
+            self.ts(self.dfn, "punt_blocks")
+            self.log(f"{_short(p.name)} punt is BLOCKED!", "play")
+            self.turnover_on_spot("Blocked punt", 100 - max(1, self.yl - 8))
+            return
+        if rcall == "Punt Block" and random.random() < 0.018:
+            # Roughing / running into the kicker: the punting team keeps the ball
+            rough = random.random() < 0.4
+            yds = 15 if rough else 5
+            self.ts(self.dfn, "penalties")
+            self.ts(self.dfn, "pen_yds", yds)
+            self.log(f"PENALTY on {self.dfn.abbr}: {'roughing' if rough else 'running into'} the kicker, "
+                     f"{yds} yards" + (", automatic first down" if rough or yds >= self.togo else ""), "play")
+            self.yl = min(99, self.yl + yds)
+            if rough or yds >= self.togo:
+                self.down, self.togo = 1, min(10, 100 - self.yl)
+            else:
+                self.togo -= yds
+            return
+        if self.drive is not None and self.drive["plays"] <= 3:
+            self.swing(self.dfn, 0.08)
+        power = self.e(p, "punt_power")
+        acc = self.e(p, "punt_accuracy")
+        gross = int(round(random.gauss(41.0 + power * 0.125 + self.wx["punt"], 5.5)))
+        if kind == "Directional Punt":
+            gross -= 3
+        elif kind == "Rugby Punt":
+            gross += int(random.gauss(-4, 3))
+        elif kind == "Pooch Punt":
+            # aim for the 8-yard line; accuracy decides how close
+            gross = int(round(to_goal - 8 + random.gauss(0, 9.5 - (acc - 60) / 10.0)))
+        self.st(p, "punts")
+        if gross >= to_goal:
+            # Pinning attempt: accuracy decides between downed deep or touchback
+            if random.random() < _clip(0.25 + (acc - 60) / 80, 0.15, 0.80):
+                spot = random.randint(2, 12)
+                gross = to_goal - spot
+                self.st(p, "punt_yds", gross)
+                self.st(p, "punt_long", gross)
+                self.st(p, "punts_in20")
+                self.log(f"{_short(p.name)} punts {gross} yards, downed at the "
+                         f"{self.dfn.abbr} {spot}.", "play")
+                self.turnover_on_spot("Punt", spot)
+                return
+            self.st(p, "punt_yds", to_goal)
+            self.st(p, "punt_long", to_goal)
+            self.st(p, "punt_tb")
+            self.log(f"{_short(p.name)} punts into the end zone. Touchback.", "play")
+            self.turnover_on_spot("Punt", 20)
+            return
+        land = to_goal - gross                     # receiving yard line
+        self.st(p, "punt_yds", gross)
+        self.st(p, "punt_long", gross)
+        fair_p = 0.30 + (acc - 70) / 150 + (0.25 if land < 15 else 0)
+        fair_p += {"Punt Block": 0.15, "Punt Safe": 0.10}.get(rcall, 0.0)
+        if kind == "Pooch Punt":
+            fair_p += 0.25
+        oob = kind == "Directional Punt" and random.random() < 0.22
+        rugby_dead = kind == "Rugby Punt" and random.random() < 0.40
+        if oob or rugby_dead or random.random() < fair_p:
+            yl = land
+            text = "out of bounds" if oob else "rolls dead" if rugby_dead else f"fair catch by {_short(ret.name)}"
+        else:
+            rr = ret.return_rating + self.form.get(ret.id, 0)
+            mean_adj, big = {"Return Wall": (0.8, 1.25), "Punt Block": (-3.0, 0.6),
+                             "Punt Safe": (-1.5, 0.8)}.get(rcall, (0.0, 1.0))
+            if kind == "Directional Punt":
+                mean_adj -= 2.5
+            elif kind == "Rugby Punt":
+                mean_adj -= 2.0
+            edge = self._st_edge(self.dfn, self.poss)
+            gain = max(-2, int(random.gauss(9.1 + (rr - 75) * 0.18 + mean_adj + edge * 0.6, 6)))
+            if random.random() < (0.0085 + max(0, rr - 78) * 0.0007) * self.big_play * big * (1 + 0.15 * edge):
+                gain = 100 - land
+            self.st(ret, "pr")
+            if land + gain >= 100:
+                self.st(ret, "pr_yds", 100 - land)
+                self.st(ret, "pr_td")
+                self.log(f"{_short(p.name)} punts {gross} yards.", "play")
+                self._end_drive("Punt")
+                self._start_drive(self.dfn, 99)
+                self.add_score(self.poss, 6, f"{_short(ret.name)} {100 - land}-yard punt return TOUCHDOWN")
+                self._after_td(self.poss)
+                return
+            self.st(ret, "pr_yds", gain)
+            self._st_cover_tackle(self.poss)
+            yl = max(1, land + gain)
+            text = f"{_short(ret.name)} returns {gain} yards"
+            if random.random() < 0.01 * self.to_rate:
+                self.st(ret, "fumbles")
+                self.st(ret, "fumbles_lost")
+                self.log(f"{_short(p.name)} punts {gross} yards, {text} and FUMBLES! "
+                         f"{self.poss.abbr} recovers.", "play")
+                self._end_drive("Punt")
+                self._start_drive(self.poss, 100 - yl)
+                return
+        if yl <= 20:
+            self.st(p, "punts_in20")
+        how = {"Rugby Punt": "rugby-style punt", "Directional Punt": "punts toward the sideline",
+               "Pooch Punt": "pooch punt"}.get(kind, "punts")
+        self.log(f"{_short(p.name)} {how} {gross} yards, {text}.", "play")
+        self.turnover_on_spot("Punt", yl)
+
+    def fg_probability(self, k, dist):
+        acc = self.e(k, "kick_accuracy")
+        power = self.e(k, "kick_power")
+        comp = self.e(k, "composure")
+        d50 = 54.0 + (acc - 77) * 0.50 + (power - 77) * 0.32 + (comp - 70) * 0.06
+        d50 += (self.fg_mult - 1.0) * 30
+        return _sig((d50 - dist - self.wx["fg_dist"]) / 5.6)
+
+    def fg_range(self, k):
+        return 47 + (self.e(k, "kick_power") - 60) * 0.42 - self.wx["fg_dist"]
+
+    def field_goal(self):
+        k = self.poss.lu["K"][0]
+        dist = 100 - self.yl + 17
+        dcall = self.st_def or self._st_def_call("fg")
+        self.st_def = None
+        if dcall == "Field Goal Block" and random.random() < 0.006:
+            self.ts(self.dfn, "penalties")
+            self.ts(self.dfn, "pen_yds", 15)
+            self.log(f"PENALTY on {self.dfn.abbr}: roughing the kicker, 15 yards, automatic first down", "play")
+            self.yl = min(99, self.yl + 15)
+            self.down, self.togo = 1, min(10, 100 - self.yl)
+            return
+        prob = self.fg_probability(k, dist)
+        bucket = "0_39" if dist < 40 else "40_49" if dist < 50 else "50"
+        self.st(k, "fga")
+        self.st(k, f"fga_{bucket}")
+        self.ts(self.poss, "fga")
+        blk = (0.019 if dcall == "Field Goal Block" else 0.007) * (1 + dist / 120.0)
+        if random.random() < blk:
+            self.ts(self.dfn, "fg_blocks")
+            self.log(f"{_short(k.name)} {dist}-yard field goal attempt is BLOCKED", "play")
+            self.swing(self.dfn, 0.35)
+            self.turnover_on_spot("Blocked FG", 100 - self.yl + 7)
+            return
+        if random.random() < prob:
+            self.st(k, "fgm")
+            self.st(k, f"fgm_{bucket}")
+            self.st(k, "fg_long", dist)
+            self.ts(self.poss, "fgm")
+            self._end_drive("Field goal")
+            self.add_score(self.poss, 3, f"{_short(k.name)} {dist}-yard field goal is GOOD")
+            self.run_clock(5, False)
+            self._ot_check()
+            if not self.game_over:
+                self.kickoff(self.poss)
+        else:
+            side = random.choice(["wide left", "wide right", "short"]) if dist > 48 \
+                else random.choice(["wide left", "wide right", "off the upright"])
+            self.log(f"{_short(k.name)} {dist}-yard field goal is NO GOOD ({side})", "play")
+            self.swing(self.dfn, 0.15)
+            self.run_clock(5, False)
+            self.turnover_on_spot("Missed FG", max(20, 107 - self.yl))
+
+    def _after_td(self, side):
+        """Extra point or two-point try, then kickoff."""
+        self.ts(side, "tds")
+        go_two = self._go_for_two(side)
+        if go_two:
+            off_q = (side.team.unit_ratings()["OFF"])
+            def_q = (self.other(side).team.unit_ratings()["DEF"])
+            prob = _clip(0.47 + (off_q - def_q) / 300.0, 0.30, 0.65)
+            if random.random() < prob:
+                self.add_score(side, 2, "Two-point conversion is GOOD")
+            else:
+                self.log("Two-point conversion FAILS", "score")
+        else:
+            k = side.lu["K"][0]
+            self.st(k, "xpa")
+            if random.random() < self.fg_probability(k, self.pat_dist) * 0.995:
+                self.st(k, "xpm")
+                side.score += 1
+                if side is self.home:
+                    self.res.home_score = side.score
+                else:
+                    self.res.away_score = side.score
+                qi = min(self.quarter, 5) - 1
+                q = self.res.quarters[side.abbr]
+                while len(q) <= qi:
+                    q.append(0)
+                q[qi] += 1
+                if self.res.scoring:
+                    qn, clk, ab, txt, _, _ = self.res.scoring[-1]
+                    self.res.scoring[-1] = (qn, clk, ab, txt + " (kick good)",
+                                            self.home.score, self.away.score)
+            else:
+                self.log(f"{_short(k.name)} extra point is NO GOOD", "score")
+        self._ot_check()
+        if not self.game_over:
+            self.kickoff(side)
+
+    def _go_for_two(self, side):
+        diff = side.score - self.other(side).score     # after the TD
+        aggr = side.plan["aggression"]
+        late = self.quarter >= 4 or (self.quarter == 3 and self.clock < 300)
+        if self.quarter >= 5:
+            return False
+        if late and diff in (-2, -5, -10, -13, -16, 1, 5, 12):
+            return random.random() < 0.55 + aggr * 0.4
+        return random.random() < 0.03 + aggr * 0.07
+
+    # ── Situational decisions ────────────────────────────────────────────────
+
+    def _kneel_ok(self):
+        if self.quarter not in (2, 4, 5):
+            return False
+        diff = self.poss.score - self.dfn.score
+        if self.quarter == 2:
+            return self.clock <= 32 and self.yl < 45 and diff >= -3 and self.down >= 1
+        if diff <= 0:
+            return False
+        downs_left = 4 - self.down + 1
+        burn = 40 * downs_left - 40 * min(self.dfn.timeouts, downs_left - 1)
+        return self.clock <= burn + 2
+
+    def _fourth_down(self):
+        """Return 'go', 'punt' or 'fg'."""
+        k = self.poss.lu["K"][0]
+        dist = 100 - self.yl + 17
+        diff = self.poss.score - self.dfn.score
+        in_range = dist <= self.fg_range(k)
+        fg_p = self.fg_probability(k, dist) if in_range else 0.0
+        late = self.quarter >= 4 and self.clock <= 240
+        aggr = self.poss.plan["aggression"] * self.go_mult
+
+        if late and diff < 0:
+            if diff >= -3 and in_range and fg_p > 0.35:
+                return "fg"
+            return "go"
+        if self.quarter >= 4 and self.clock <= 30 and -3 <= diff <= 0 and in_range:
+            return "fg"
+        if self.quarter >= 5 and diff == 0 and in_range and fg_p > 0.4:
+            return "fg"
+        if self.quarter >= 5 and -3 <= diff < 0 and in_range and fg_p > 0.5 and self.clock > 60:
+            return "fg"
+        if self.quarter == 2 and self.clock <= 30 and in_range and fg_p > 0.3:
+            return "fg"
+
+        base = {1: 0.42, 2: 0.24, 3: 0.14, 4: 0.08, 5: 0.06}.get(self.togo, 0.025)
+        if self.yl < 40:
+            base *= 0.30
+        elif self.yl < 60:
+            base *= 1.0
+        elif not in_range or fg_p < 0.55:
+            base *= 1.7
+        else:
+            base *= 0.8
+        if self.yl >= 97 and self.togo <= 3:
+            base = max(base, 0.35)
+        if late and diff > 0:
+            base *= 0.3
+        go_p = base * (0.45 + aggr * 1.25)
+        if random.random() < go_p:
+            return "go"
+        if in_range and fg_p >= 0.40:
+            return "fg"
+        if self.yl >= 62 and fg_p < 0.45:
+            # No man's land: go for it more, otherwise pooch punt
+            if random.random() < 0.25 + aggr * 0.3:
+                return "go"
+        return "punt"
+
+    def _pass_probability(self):
+        plan = self.poss.plan
+        p = plan["pass_rate"]
+        d, t = self.down, self.togo
+        if d == 1:
+            p -= 0.06 if t >= 10 else 0.10
+        elif d == 2:
+            p += 0.13 if t >= 8 else (-0.13 if t <= 3 else 0.0)
+        elif d >= 3:
+            if t >= 7:
+                p += 0.36
+            elif t >= 4:
+                p += 0.22
+            elif t <= 2:
+                p -= 0.24
+        if self.yl >= 97:
+            p += 0.02
+        elif self.yl >= 85:
+            p += 0.04
+        diff = self.poss.score - self.dfn.score
+        mode = self.urgency(self.poss)
+        if mode == "hurry":
+            p += 0.24
+        elif mode == "milk":
+            p -= 0.22
+        else:
+            # Game script: protect leads on the ground, chase deficits through
+            # the air. The pull grows as the clock runs; aggressive coaches
+            # keep throwing with a lead.
+            prog = _clip(self.elapsed() / 3600.0, 0.0, 1.0)
+            s = diff / (7.0 + 14.0 * (1.0 - prog))
+            lean = 0.21 * math.tanh(s) * (0.30 + 0.70 * prog)
+            if diff > 0:
+                lean *= 1.2 - 0.45 * plan["aggression"]
+            p -= lean
+        p += self.wx["pass_shift"] + self.pass_shift + self.poss.oshift
+        return _clip(p, 0.05, 0.97)
+
+    # ── A single snap ────────────────────────────────────────────────────────
+
+    def snap(self):
+        self.cur_diag = None
+        self._adv = None
+        self._adv_void = False
+        self._ocall = None
+        self.dcall = None
+        self._last_tackler = None
+        mid_drive = self.drive is not None and self.drive["plays"] >= 1
+        self.no_huddle = mid_drive and (self.urgency(self.poss) == "hurry" or
+                                        random.random() < self.poss.plan["tempo"] * 0.30)
+        if self.mom:
+            self.mom *= 0.92
+            self.mom_pts = self.mom * 1.6 * self.mom_scale
+        if self.drive is not None:
+            self.drive["plays"] += 1
+        if self.yl >= 80 and not self.drive["rz"]:
+            self.drive["rz"] = True
+            self.ts(self.poss, "rz_trips")
+
+        # End-of-half / game situations
+        if self._kneel_ok():
+            self._kneel()
+            return
+        diff = self.poss.score - self.dfn.score
+        k = self.poss.lu["K"][0]
+        fg_dist = 100 - self.yl + 17
+        if self.clock <= 6 and (self.quarter == 2 or (self.quarter >= 4 and -3 <= diff <= 0)) \
+                and fg_dist <= self.fg_range(k) + 3:
+            self.field_goal()
+            return
+        if self.down == 4:
+            choice = self._fourth_down()
+            if choice in ("punt", "fg"):
+                self.st_def = self._st_def_call(choice)
+            if choice in ("punt", "fg") and self._fake_ok():
+                pre = self._ep_pre()
+                out = self._fake_kick(choice)
+                self.resolve(out)
+                self._credit_adv(pre, out)
+                return
+            if choice == "punt":
+                self.run_clock(8, False)
+                self.punt()
+                return
+            if choice == "fg":
+                self.field_goal()
+                return
+
+        # Pre-snap penalty
+        if self._pre_snap_penalty():
+            return
+
+        hail = (self.clock <= 8 and self.quarter in (2, 4) and 45 <= self.yl < 70
+                and (self.quarter == 2 or -8 <= diff < 0))
+        plan = self.poss.plan
+        normal = not hail and self.urgency(self.poss) == "normal"
+        if normal and self.down <= 2 and 25 <= self.yl <= 85 and \
+                random.random() < 0.010 * plan["trick"]:
+            out = self._trick_play()
+        elif normal and self.down <= 3 and self.togo <= 10 and self.yl < 97 and \
+                random.random() < plan["rpo"] * 0.11:
+            out = self._rpo()
+        elif hail or random.random() < self._pass_probability():
+            out = self.pass_play(hail=hail)
+        else:
+            out = self.run_play()
+        pre = self._ep_pre()
+        self.resolve(out)
+        self._credit_adv(pre, out)
+
+    # ── Advanced stats: expected points added, success, air yards ────────────
+
+    def _ep_pre(self):
+        side = self.poss
+        return (side, self.other(side), adv_lib.expected_points(self.down, self.togo, self.yl),
+                side.score, self.other(side).score, self.quarter, self.togo)
+
+    def _credit_adv(self, pre, out):
+        if self._adv_void:
+            return
+        side, other, ep0, s0, o0, q0, togo0 = pre
+        dpts = (side.score - s0) - (other.score - o0)
+        if dpts:
+            if out.get("safety"):
+                post = dpts - adv_lib.KICKOFF_EP
+            else:
+                post = dpts + (-adv_lib.KICKOFF_EP if dpts > 0 else adv_lib.KICKOFF_EP)
+        elif self.game_over or (self.quarter != q0 and q0 in (2, 4, 5)):
+            post = 0.0
+        elif self.poss is side:
+            post = adv_lib.expected_points(self.down, self.togo, self.yl)
+        else:
+            post = -adv_lib.expected_points(self.down, self.togo, self.yl)
+        e = round(post - ep0, 3)
+        good = e > 0
+        self.ts(side, "epa", e)
+        self.ts(side, "epa_plays")
+        if good:
+            self.ts(side, "succ")
+        # Play-calling report: how each call worked (offence and defence)
+        ts_off = self.res.team_stats[side.abbr]
+        ts_def = self.res.team_stats[other.abbr]
+        if self._ocall:
+            ts_off[f"oc|{self._ocall}|n"] += 1
+            ts_off[f"oc|{self._ocall}|epa"] += e
+            if good:
+                ts_off[f"oc|{self._ocall}|s"] += 1
+        dc = self.dcall
+        if dc is not None:
+            for fam in (dc["cov"], "Pressure (5+ rushers)" if dc["blitz"] else
+                        ("Line stunt" if dc["stunt"] else "Creeper" if dc["sim"] else "Four-man rush"),
+                        dc["front"] + " front"):
+                ts_def[f"dc|{fam}|n"] += 1
+                ts_def[f"dc|{fam}|epa"] += e
+                if good:
+                    ts_def[f"dc|{fam}|s"] += 1
+        g = self.gstats[side.abbr]
+        if out["kind"] == "run" or (self._adv or {}).get("rusher") is not None:
+            g["run_n"] += 1
+            g["run_epa"] += e
+        elif out["kind"] in ("pass", "sack", "turnover", "pick6"):
+            g["pass_n"] += 1
+            g["pass_epa"] += e
+            if (self._adv or {}).get("air", 0) >= 15:
+                g["deep_n"] += 1
+                g["deep_epa"] += e
+        a = self._adv
+        if not a:
+            return
+        yards = out.get("yards", 0)
+        self._exert(out.get("carrier"), yards)
+        if not good and self._last_tackler is not None and out["kind"] in ("run", "pass") \
+                and not out.get("incomplete"):
+            self.st(self._last_tackler, "stops")
+        moved = out.get("td") or (yards >= togo0 and out["kind"] in ("run", "pass"))
+        if a.get("qb") is not None:
+            qb = a["qb"]
+            self.st(qb, "dropbacks")
+            self.st(qb, "pass_epa", e)
+            self.ts(side, "dropbacks")
+            if good:
+                self.st(qb, "pass_succ")
+            if a.get("pressured"):
+                self.st(qb, "pressured")
+                self.ts(side, "pressured")
+            rec = a.get("rec")
+            if rec is not None and not a.get("scramble"):
+                air = a.get("air", 0)
+                self.st(qb, "iay", air)
+                self.ts(side, "iay", air)
+                self.st(rec, "rec_air", air)
+                self.st(rec, "rec_epa", e)
+                if out.get("complete"):
+                    self.st(qb, "cay", air)
+                    if moved:
+                        self.st(qb, "pass_first")
+                        self.st(rec, "rec_first")
+                d = a.get("dfnd")
+                if d is not None:
+                    self.st(d, "tgt_allowed")
+                    if out.get("complete"):
+                        self.st(d, "cmp_allowed")
+                        self.st(d, "yds_allowed", yards)
+                        if out.get("td"):
+                            self.st(d, "td_allowed")
+        elif a.get("rusher") is not None:
+            r = a["rusher"]
+            self.st(r, "rush_epa", e)
+            if good:
+                self.st(r, "rush_succ")
+            if moved:
+                self.st(r, "rush_first")
+
+    def _kneel(self):
+        qb = self.poss.qb
+        self.st(qb, "rush_att")
+        self.st(qb, "rush_yds", -1)
+        self.ts(self.poss, "rush_att")
+        self.ts(self.poss, "rush_yds", -1)
+        self.log(f"{_short(qb.name)} kneels.")
+        self.yl = max(1, self.yl - 1)
+        self.down += 1
+        self.togo += 1
+        stop = self.dfn.timeouts > 0 and self.dfn.score < self.poss.score
+        if stop:
+            self.dfn.timeouts -= 1
+            self.run_clock(2, False)
+        else:
+            self.clock -= 41
+            self.ts(self.poss, "top", 41)
+        if self.down > 4 and self.clock > 0:
+            self.turnover_on_spot("Downs")
+
+    def _pre_snap_penalty(self):
+        rate = 0.034 * self.pen_rate
+        off_disc = 1.35 - self.poss.disc / 100.0 * 0.7
+        def_disc = 1.35 - self.dfn.disc / 100.0 * 0.7
+        r = random.random()
+        if r < rate * off_disc * 0.55:
+            name = random.choice(["False start", "False start", "Delay of game",
+                                  "Illegal formation"])
+            p = random.choice(self.poss.ol) if name == "False start" else self.poss.qb
+            self._penalty(self.poss, p, name, 5)
+            self.yl = max(1, self.yl - 5)
+            self.togo += 5
+            self.log(f"PENALTY: {name}, {self.poss.abbr} ({_short(p.name)}), 5 yards", "play")
+            self.run_clock(0, False)
+            return True
+        if r < rate * (off_disc * 0.55 + def_disc * 0.45):
+            name = random.choice(["Offside", "Neutral zone infraction", "Encroachment"])
+            p = random.choice(self.dfn.lu["DT"][:2] + self.dfn.lu["EDGE"][:2])
+            yds = min(5, (100 - self.yl) // 2) if self.yl > 90 else 5
+            self._penalty(self.dfn, p, name, yds)
+            self.yl += yds
+            self.togo -= yds
+            self.log(f"PENALTY: {name}, {self.dfn.abbr} ({_short(p.name)}), {yds} yards", "play")
+            if self.togo <= 0:
+                self._first_down(penalty=True)
+            self.run_clock(0, False)
+            return True
+        return False
+
+    def _penalty(self, side, player, name, yards):
+        self.ts(side, "penalties")
+        self.ts(side, "pen_yds", yards)
+        self.st(player, "penalties")
+        self.st(player, "pen_yds", yards)
+
+    # ── Personnel ────────────────────────────────────────────────────────────
+
+    def _personnel(self):
+        plan = self.poss.plan
+        heavy = plan["heavy"]
+        short = self.togo <= 2 or self.yl >= 96
+        w = {
+            "11": max(0.05, 0.64 - 0.38 * heavy),
+            "12": 0.12 + 0.22 * heavy,
+            "21": (0.03 + 0.14 * heavy) if self.poss.team.players_at("FB") else 0.0,
+            "10": 0.03 + 0.10 * plan["tempo"] + 0.14 * max(0, plan["pass_rate"] - 0.58),
+            "22": 0.01,
+        }
+        scheme = self.poss.team.coach.off_scheme
+        if scheme == "Flexbone":
+            w["10"] += 0.75                 # two slotbacks ("A-backs") flank the B-back
+        elif scheme == "Wing-T" and w["21"]:
+            w["21"] += 0.45
+        elif scheme == "Run and Shoot":
+            w["10"] += 0.30
+        elif scheme == "Pistol":
+            w["12"] += 0.08
+        if short:
+            w["22"] += 0.35
+            w["12"] += 0.25
+            w["21"] += 0.15 if w["21"] else 0.0
+            w["10"] *= 0.3
+        if self.urgency(self.poss) == "hurry":
+            w["10"] += 0.25
+            w["22"] = 0.0
+        keys = list(w)
+        return random.choices(keys, weights=[w[k] for k in keys], k=1)[0]
+
+    def _formation(self, pers):
+        lu = self.poss.lu
+        wr_n = {"11": 3, "12": 2, "21": 2, "10": 4, "22": 1}[pers]
+        te_n = {"11": 1, "12": 2, "21": 1, "10": 0, "22": 2}[pers]
+        fb = pers in ("21", "22")
+        side = self.poss
+        wrs = self._rotate(side, "WR", wr_n)
+        tes = self._rotate(side, "TE", te_n) if te_n else []
+        rb = self._pick_rb()
+        fbp = lu["FB"][0] if fb and lu["FB"] else None
+        return wrs, tes, rb, fbp
+
+    def _pick_rb(self):
+        side = self.poss
+        rbs = side.lu["RB"]
+        if not rbs:
+            return None
+        bf = side.bf
+        if len(rbs) == 1 or bf is None:
+            return rbs[0]
+        rb1 = bf["rb1"]
+        to_goal = 100 - self.yl
+        # Situational specialists
+        if bf["goal"] is not None and (to_goal <= 3 or (self.togo <= 1 and self.down >= 3)) \
+                and random.random() < 0.40 + 0.25 * bf["committee"]:
+            return bf["goal"]
+        passing_down = (self.down == 3 and self.togo >= 5) or self.urgency(side) == "hurry" \
+            or (self.down == 2 and self.togo >= 10)
+        if bf["third"] is not None and passing_down and \
+                random.random() < 0.30 + 0.45 * bf["committee"]:
+            pick = bf["third"]
+            side.rb1_streak = 0 if pick is not rb1 else side.rb1_streak
+            return pick
+        share = bf["share"]
+        # Fatigue: a winded back gets a breather (energy falls with every snap he plays)
+        share -= max(0.0, 88.0 - self.energy_of(rb1)) * 0.016
+        if self._garbage(side):
+            share *= 0.35
+        # Ride the hot hand (or sit a struggling starter)
+        line = self.res.player_stats.get(rb1.id)
+        if line and line["rush_att"] >= 8:
+            ypc = line["rush_yds"] / line["rush_att"]
+            share += _clip((ypc - 4.3) * 0.025, -0.10, 0.08)
+        # Closing out a win: feed the starter
+        if self.quarter >= 4 and side.score - self.dfn.score >= 8:
+            share += 0.06
+        # Workload management: limit carries in a game and across a season
+        if line and line["rush_att"] > 22:
+            share -= (line["rush_att"] - 22) * 0.035
+        ss = rb1.season_stats
+        gp = ss.get("gp", 0)
+        if gp >= 3:
+            per_game = ss.get("rush_att", 0) / gp
+            if per_game > 20.5:
+                share -= (per_game - 20.5) * 0.03
+        share = _clip(share, 0.25, 0.95)
+        if random.random() < share:
+            side.rb1_streak += 1
+            return rb1
+        side.rb1_streak = 0
+        if bf["rb3"] is not None and random.random() < 0.07:
+            return bf["rb3"]
+        return bf["rb2"] or rb1
+
+    def _slot_map(self, pers, wrs, tes, rb, fbp):
+        """Which player lines up in which formation slot."""
+        out = {}
+        wr_slots = ["X", "Z", "SL", "SL2"] if pers != "22" else ["X"]
+        for s, p in zip(wr_slots, wrs):
+            out[s] = p
+        for s, p in zip(["TE", "TE2"], tes):
+            out[s] = p
+        if rb is not None:
+            out["RB"] = rb
+        if fbp is not None:
+            out["FB"] = fbp
+        return out
+
+    def _defense_set(self, wr_count):
+        lu = self.dfn.lu
+        if wr_count >= 4 and self.poss.team.coach.off_scheme == "Flexbone":
+            wr_count = 2                    # slotbacks are treated as backs: base defense
+        front = self.dfn.plan["front"]
+        d = self.dfn
+        lock = self.no_huddle             # no time to substitute against a no-huddle offense
+        dts = self._rotate(d, "DT", 2, lock)
+        edges = self._rotate(d, "EDGE", 2, lock)
+        n_lb, n_cb, n_s = (1, 4, 3) if wr_count >= 4 else (2, 3, 2) if wr_count == 3 else (3, 2, 2)
+        if front == "3-4" and wr_count <= 2 and len(lu["DT"]) > 0:
+            dts = dts[:1]
+            n_lb = 4
+        lbs = self._rotate(d, "LB", n_lb, lock)
+        cbs = self._rotate(d, "CB", n_cb, lock)
+        ss = self._rotate(d, "S", n_s, lock)
+        return dts, edges, lbs, cbs, ss
+
+    # ── Unit strengths ───────────────────────────────────────────────────────
+
+    def _pass_pro(self, extra_blockers):
+        e = self.e
+        ol = self.poss.ol
+        v = sum(e(p, "pass_block") * 0.50 + e(p, "footwork") * 0.25 + e(p, "strength") * 0.12
+                + e(p, "awareness") * 0.13 for p in ol) / max(1, len(ol))
+        for b in extra_blockers:
+            v += (e(b, "pass_block") - 55) * 0.06
+        v += (staff_mod.off_calling(self.poss.team) - 10) * 0.35
+        return v
+
+    def _def_call(self, n_cb):
+        """The defensive coordinator's call for this snap (he never sees the offensive call)."""
+        de = self.dfn
+        sit = {"down": self.down, "togo": self.togo, "to_goal": 100 - self.yl,
+               "hurry": self.urgency(self.poss) == "hurry",
+               "late": (self.quarter == 4 and self.clock <= 150) or (self.quarter == 2 and self.clock <= 40),
+               "lead": de.score - self.poss.score, "n_cb": n_cb}
+        dp = dict(de.plan)
+        for k in ("blitz", "zone", "two_high"):
+            dp[k] = _clip(dp[k] + de.dgp.get(k, 0.0) + de.dadj.get(k, 0.0), 0.0, 1.0)
+        call = dfn_lib.choose_call(dp, sit, scheme=de.team.coach.def_scheme,
+                                   prefs=getattr(de.team, "play_prefs", None))
+        call["box"] = _clip(de.dgp.get("box", 0.0) + de.dadj.get("box", 0.0), -1.0, 1.0)
+        self._spy_on = bool(de.dgp.get("spy")) and not call["blitz"] and random.random() < 0.75
+        self.dcall = call
+        return call
+
+    def _pass_rush(self, rushers):
+        e = self.e
+        tot = 0.0
+        wsum = 0.0
+        for p, w in rushers:
+            best = max(e(p, "power_move"), e(p, "finesse_move"))
+            other = min(e(p, "power_move"), e(p, "finesse_move"))
+            v = best * 0.34 + other * 0.10 + e(p, "pass_rush_iq") * 0.18 \
+                + e(p, "acceleration") * 0.22 + e(p, "strength") * 0.16
+            tot += v * w
+            wsum += w
+        v = tot / max(0.01, wsum)
+        v += (staff_mod.def_calling(self.dfn.team) - 10) * 0.35
+        return v
+
+    # ── Pass play ────────────────────────────────────────────────────────────
+
+    def pass_play(self, hail=False, call=None):
+        call = call or {}
+        e = self.e
+        off, de = self.poss, self.dfn
+        plan, dplan = off.plan, de.plan
+        qb = off.qb
+        self._adv = {"qb": qb, "pressured": False}
+        pers = self._personnel()
+        wrs, tes, rb, fbp = self._formation(pers)
+        dts, edges, lbs, cbs, ss = self._defense_set(len(wrs))
+        self._snap_units([qb] + off.ol + wrs + tes + [rb, fbp], dts + edges + lbs + cbs + ss)
+        to_goal = 100 - self.yl
+        self.ts(off, "plays")
+
+        # Play type
+        if hail:
+            ptype = "hail"
+        else:
+            deep = 0.125 + 0.07 * plan["deep"] - 0.06 * dplan["two_high"]
+            deep += (e(qb, "throw_power") - 75) / 600.0
+            screen = 0.025 + 0.09 * plan["screen"]
+            medium = 0.28
+            if self.togo >= 12:
+                medium += 0.06
+                deep += 0.03
+            if to_goal <= 12:
+                deep = 0.0 if to_goal < 6 else 0.10
+                medium = 0.08 if to_goal <= 10 else medium
+            if to_goal <= 20 and to_goal > 12:
+                deep *= 0.4
+            if self.urgency(off) == "hurry" and self.clock < 60:
+                deep += 0.06
+                screen *= 0.3
+            short = max(0.25, 1.0 - deep - screen - medium)
+            ptype = random.choices(["screen", "short", "medium", "deep"],
+                                   weights=[screen, short, medium, deep], k=1)[0]
+        if call.get("rpo"):
+            ptype = "screen" if random.random() < 0.25 else "short"
+        elif call.get("trick") == "flea":
+            ptype = "deep"
+
+        # Play-action: sell the run, freeze the linebackers, take a shot
+        pa = False
+        if call.get("trick") == "flea":
+            pa = True
+        elif not hail and not call and ptype != "screen" and self.down <= 2 and \
+                self.urgency(off) == "normal" and to_goal > 4:
+            line = self.res.team_stats[off.abbr]
+            ypc = line["rush_yds"] / line["rush_att"] if line["rush_att"] >= 6 else 4.2
+            cred = _clip(0.80 + (ypc - 4.2) * 0.10 + (0.55 - plan["pass_rate"]) * 0.8, 0.55, 1.25)
+            if random.random() < plan["play_action"] * 0.62 * cred:
+                pa = True
+                if ptype == "short" and random.random() < 0.45:
+                    ptype = "medium"
+                elif ptype == "medium" and random.random() < 0.20:
+                    ptype = "deep"
+
+        # The call: a formation and a concept from the coach's system
+        gun = 0.35 + 0.5 * plan["tempo"] + (0.3 if self.down >= 3 else 0.0)
+        form_name = pb.choose_formation(pers, run=False, gun_bias=min(1.0, gun),
+                                        scheme=off.team.coach.off_scheme)
+        play = pb.choose_pass_play(off.team.coach.off_scheme, ptype, pa=pa,
+                                   trick=call.get("trick") == "flea",
+                                   prefs=getattr(off.team, "play_prefs", None),
+                                   rpo=bool(call.get("rpo")), form=form_name)
+        self._ocall = play["name"]
+        slot_of = self._slot_map(pers, wrs, tes, rb, fbp)
+        route_of = {p.id: play["routes"].get(slot, "block") for slot, p in slot_of.items()}
+
+        # The defensive call
+        dc = self._def_call(len(cbs))
+        blitz = dc["blitz"]
+        # Backs with a protection assignment check-release when nobody comes
+        if not blitz and not pa and not call.get("rpo"):
+            for slot in ("RB", "FB"):
+                p = slot_of.get(slot)
+                if p is not None and route_of.get(p.id) == "block" and random.random() < 0.55:
+                    route_of[p.id] = "checkdown"
+        rushers = [(p, 1.0) for p in edges] + [(p, 0.62) for p in dts]
+        cov_lbs, cov_ss, cov_cbs = list(lbs), list(ss), list(cbs)
+        for who in dc["who"]:
+            pool = {"LB": cov_lbs, "S": cov_ss, "NB": cov_cbs[2:] or cov_lbs}[who]
+            if pool:
+                b = pool[-1]
+                for lst in (cov_lbs, cov_ss, cov_cbs):
+                    if b in lst:
+                        lst.remove(b)
+                rushers.append((b, 0.55))
+        if dc["rush"] == 3 and dts:
+            rushers = [r for r in rushers if r[0] is not dts[-1]]
+        if self._spy_on and cov_lbs:
+            cov_lbs.pop(0)                       # the spy mirrors the quarterback
+        if dc["sim"] and dts and lbs:
+            rushers = [r for r in rushers if r[0] is not dts[-1]] + [(lbs[-1], 0.62)]
+        keep_in = []
+        if rb and random.random() < (0.22 if not blitz else 0.45):
+            keep_in.append(rb)
+        if tes and pers in ("12", "22") and random.random() < 0.35:
+            keep_in.append(tes[-1])
+        for slot in ("RB", "FB", "TE", "TE2"):
+            p = slot_of.get(slot)
+            if p is not None and route_of.get(p.id) == "block" and p not in keep_in:
+                keep_in.append(p)
+        zone = not dc["man"]
+        two_high = dc["two_high"]
+        coverage = dc["cov"]
+        if self.diagrams:
+            self.cur_diag = {"form": form_name, "play": play["name"], "pers": pers,
+                             "mirror": random.random() < 0.5,
+                             "routes": {s: route_of.get(p.id, "block") for s, p in slot_of.items()},
+                             "names": {s: (p.jersey, _short(p.name)) for s, p in slot_of.items()},
+                             "cov": coverage, "front": dc["front"], "blitz": blitz, "dcall": dc["name"],
+                             "n_lb": len(lbs), "n_cb": len(cbs), "n_s": len(ss), "pa": pa}
+
+        rush = self._pass_rush(rushers) + dfn_lib.FRONTS[dc["front"]]["rush"]
+        pro = self._pass_pro(keep_in)
+        if dc["stunt"]:
+            # Line games: a sharp, experienced line passes them off; a green one gives up a free rusher
+            ol_aw = sum(e(p, "awareness") for p in off.ol) / max(1, len(off.ol))
+            rush += 1.5 - (ol_aw - 70) * 0.18 + random.gauss(0, 3.0)
+        if dc["sim"]:
+            rush += 2.0 - (e(qb, "progression_reads") - 70) * 0.10
+        if dc["rush"] == 3:
+            rush -= 6.0
+        time_req = {"screen": -1.3, "short": -0.40, "medium": 0.18, "deep": 0.48,
+                    "hail": 0.6}[ptype]
+        if pa:
+            time_req += 0.30 if not call.get("trick") else 0.55
+        if call.get("rpo"):
+            time_req -= 0.6
+        p_press = _sig(-1.07 + (rush - pro) / 33.0 + time_req + (0.42 if blitz else 0.0))
+        pressured = random.random() < p_press
+
+        # Sack / scramble / throwaway under pressure
+        if pressured:
+            self._adv["pressured"] = True
+            escape = e(qb, "pocket_presence") * 0.5 + e(qb, "agility") * 0.25 \
+                + e(qb, "speed") * 0.25
+            p_sack = _clip(0.29 - (escape - 62) / 210.0, 0.08, 0.48) * self.sack_mult * self.rx["sack"]
+            if random.random() < p_sack:
+                return self._sack(qb, rushers)
+            mob = (e(qb, "speed") - 60) / 75.0
+            hit_rusher = self._weighted_rusher(rushers)
+            self.st(hit_rusher, "pressures")
+            if random.random() < _clip(mob * 0.65, 0.03, 0.50) and not hail:
+                self._adv["scramble"] = True
+                if self.cur_diag is not None:
+                    self.cur_diag.update(run="scramble", carrier="QB", dir=random.choice([-1, 1]))
+                return self._qb_run(qb, scramble=True)
+            if random.random() < 0.38:
+                self.st(hit_rusher, "qb_hits")
+            if random.random() < 0.20 and not hail:
+                self.st(qb, "pass_att")
+                self.ts(off, "pass_att")
+                return {"kind": "pass", "yards": 0, "clock_runs": False, "time": 5,
+                        "text": f"{_short(qb.name)} under pressure, throws it away"}
+
+        # Targets & coverage: the receivers running routes in this concept
+        cands = self._receivers(wrs, tes, rb, fbp, ptype)
+        routed = []
+        for r, role, prior in cands:
+            rt = route_of.get(r.id, "block")
+            if rt == "block" or r in keep_in:
+                continue
+            cls = pb.ROUTES[rt]["cls"]
+            adj = 1.7 if cls == ptype else 0.85 if {cls, ptype} <= {"short", "medium"} or \
+                {cls, ptype} <= {"medium", "deep"} or {cls, ptype} <= {"screen", "short"} else 0.55
+            routed.append((r, role, prior * adj))
+        if routed:
+            cands = routed
+        cov = self._coverage_map(cands, cov_cbs, cov_ss, cov_lbs, zone)
+        # Defenses roll safety help toward the most dangerous receiver
+        threats = [c for c in cands if c[1] != "RB" and c[1] != "FB"]
+        star = max(threats, key=lambda c: c[0].ca)[0] if threats else None
+        target = de.dgp.get("bracket_pid")
+        marked = next((c[0] for c in threats if c[0].id == target), None)
+        if marked is not None:
+            star = marked
+        bracket = star is not None and \
+            random.random() < de.dgp.get("bracket", 0.5) * (1.25 if two_high else 0.6)
+        scored = []
+        pa_bonus = 0.0
+        if pa:
+            lb_bite = sum(e(p, "play_recognition") for p in lbs) / max(1, len(lbs))
+            pa_bonus = _clip(5.0 - (lb_bite - 65) * 0.12 + (e(qb, "play_action") - 70) * 0.06, 1.0, 9.0)
+            if call.get("trick") == "flea":
+                pa_bonus += 9.0
+        for r, role, prior in cands:
+            d = cov.get(r.id)
+            o = self._openness(r, d, ptype, zone, blitz)
+            if bracket:
+                o += -9.0 if r is star else 2.5
+            if pa:
+                o += pa_bonus * (1.0 if ptype in ("medium", "deep") else 0.4)
+            if call.get("rpo") and role.startswith(("WR", "TE")):
+                o += 4.0          # the conflict defender can't play both
+            if role.startswith(("WR", "TE")):
+                o += dc["box"] * 1.2                  # an eighth man in the box is one fewer in coverage
+            o += dfn_lib.route_edge(coverage, route_of.get(r.id, ""))
+            scored.append((r, role, prior, o, d))
+        # The quarterback's read: better processors find the open man more often
+        read = e(qb, "progression_reads") * 0.6 + e(qb, "decision_making") * 0.4
+        temp = _clip(15.0 - (read - 60) / 5.0, 7.0, 17.0) * (1.25 if pressured else 1.0)
+        weights = [max(0.01, pr * math.exp(_clip(o, -40, 40) / temp)) for (_, _, pr, o, _) in scored]
+        tgt = random.choices(scored, weights=weights, k=1)[0]
+        rec, role, _, openness, dfnd = tgt
+        if ptype in ("medium", "deep") and (
+                (pressured and random.random() < 0.35) or
+                (openness < -6 and random.random() < 0.30)):
+            # Checkdown: under duress, or the read downfield is blanketed
+            short_opts = [s for s in scored if s[1] in ("RB", "TE1", "FB") and s[0] is not rec]
+            if short_opts:
+                rec, role, _, openness, dfnd = max(short_opts, key=lambda s: s[3] + random.gauss(0, 6))
+                openness = max(openness, 2.0)
+                ptype = "short"
+
+        # Air yards
+        if ptype == "screen":
+            air = int(round(random.gauss(-1.5, 1.5)))
+        elif ptype == "short":
+            air = random.choice([1, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 8, 9])
+        elif ptype == "medium":
+            air = random.randint(10, 19)
+        elif ptype == "deep":
+            air = 20 + int(random.expovariate(1 / 8.5))
+            arm = e(qb, "throw_power")
+            air = min(air, int(36 + (arm - 60) * 0.55) + random.randint(0, 6))
+        else:
+            air = min(to_goal, random.randint(45, 60))
+        rt = route_of.get(rec.id)
+        if rt and pb.ROUTES[rt]["cls"] == ptype and ptype in ("screen", "short", "medium", "deep"):
+            lo, hi = {"screen": (-3, 1), "short": (0, 9), "medium": (10, 19), "deep": (20, 48)}[ptype]
+            sd = {"screen": 1.0, "short": 1.6, "medium": 2.2, "deep": 4.5}[ptype]
+            air = int(round(_clip(pb.ROUTES[rt]["depth"] + random.gauss(0, sd), lo, hi)))
+            if ptype == "deep":
+                arm = e(qb, "throw_power")
+                air = min(air, int(36 + (arm - 60) * 0.55) + random.randint(0, 6))
+        air = min(air, to_goal)
+        self._adv.update(rec=rec, air=air, dfnd=dfnd)
+        if self.cur_diag is not None:
+            slot = next((s for s, p in slot_of.items() if p is rec), None)
+            self.cur_diag["target"] = slot
+            self.cur_diag["air"] = air
+
+        # Completion
+        if ptype == "screen":
+            acc = e(qb, "screen_accuracy")
+        elif ptype == "short":
+            acc = e(qb, "short_accuracy")
+        elif ptype == "medium":
+            acc = e(qb, "medium_accuracy") * 0.8 + e(qb, "touch") * 0.2
+        else:
+            acc = e(qb, "deep_accuracy") * 0.65 + e(qb, "throw_power") * 0.2 + e(qb, "touch") * 0.15
+        acc += self.wx["acc"] + (self.wx["deep_acc"] if ptype in ("deep", "hail") else
+                                 self.wx["deep_acc"] * 0.4 if ptype == "medium" else 0.0)
+        base = {"screen": 0.75, "short": 0.655, "medium": 0.515, "deep": 0.355,
+                "hail": 0.06}[ptype]
+        catch = e(rec, "catching")
+        if ptype in ("medium", "deep") or openness < -5:
+            catch = catch * 0.5 + e(rec, "catch_in_traffic") * 0.22 \
+                + e(rec, "spectacular_catch") * 0.13 + e(rec, "jumping") * 0.15
+            if dfnd is not None and ptype in ("medium", "deep"):
+                # Winning at the catch point: height of the jump vs the defender's
+                catch += (e(rec, "jumping") - e(dfnd, "jumping")) * 0.06
+        catch += self.wx["catch"]
+        p_comp = base + 0.064 + (acc - 77) / 100.0 * 0.30 + openness / 100.0 * 0.46 \
+            + (catch - 75) / 100.0 * 0.13
+        if dfnd is not None and openness < 4:
+            p_comp -= (e(dfnd, "pass_breakup") - 60) / 100.0 * 0.05
+        if pressured:
+            tup = e(qb, "throw_under_pressure")
+            p_comp -= 0.19 * (1.25 - tup / 100.0)
+        if to_goal <= 20 and ptype != "hail":
+            p_comp -= 0.05 if to_goal > 10 else (0.16 if to_goal > 3 else 0.12)
+        if hail:
+            p_comp = 0.06
+        p_comp = _clip(p_comp * self.comp_mult, 0.04, 0.94)
+
+        # Interception
+        int_base = {"screen": 0.005, "short": 0.018, "medium": 0.038, "deep": 0.068,
+                    "hail": 0.18}[ptype]
+        ball = (e(dfnd, "interception") * 0.6 + e(dfnd, "anticipation") * 0.4) if dfnd else 50
+        dec = e(qb, "decision_making")
+        p_int = int_base * (1 + (ball - dec) / 80.0) * (1.45 if pressured else 1.0)
+        p_int *= (1 + max(0.0, -openness) / 35.0) * self.to_rate
+        p_int = _clip(p_int, 0.002, 0.30)
+
+        self.st(qb, "pass_att")
+        self.ts(off, "pass_att")
+        self.st(rec, "targets")
+        r = random.random()
+        if r < p_int:
+            return self._interception(qb, rec, dfnd, cbs + ss + lbs, air, ptype)
+        if r < p_int + p_comp:
+            out = self._completion(qb, rec, dfnd, air, ptype, lbs + ss + cbs, pressured)
+            if (pa or call) and "text" in out and out["kind"] == "pass":
+                out["text"] = out["text"].replace(" pass ", " pass " + self._call_label(call, pa), 1)
+            return out
+        # Incomplete
+        why = "incomplete"
+        if random.random() < _clip(0.16 + (60 - catch) / 150.0, 0.04, 0.30) and openness > -6:
+            self.st(rec, "drops")
+            why = "DROPPED"
+        elif dfnd and random.random() < _clip(0.22 + e(dfnd, "pass_breakup") / 250.0, 0.2, 0.62):
+            self.st(dfnd, "pd")
+            why = f"broken up by {_short(dfnd.name)}"
+        depth = {"screen": "screen", "short": "short", "medium": "", "deep": "deep",
+                 "hail": "Hail Mary"}[ptype]
+        depth = self._call_label(call, pa) + depth
+        side = random.choice(["left", "middle", "right"])
+        out = {"kind": "pass", "yards": 0, "clock_runs": False, "time": 6,
+               "text": f"{_short(qb.name)} pass {depth} {side} to {_short(rec.name)} {why}".replace("  ", " "),
+               "air": air, "ptype": ptype, "incomplete": True, "def": dfnd}
+        return out
+
+    def _receivers(self, wrs, tes, rb, fbp, ptype):
+        out = []
+        roles = ["WR1", "WR2", "WR3", "WR4"]
+        prior_wr = [1.0, 0.90, 0.74, 0.52]
+        def busy(p):
+            line = self.res.player_stats.get(p.id)
+            tg = line["targets"] if line else 0
+            f = 1.0 / (1.0 + max(0, tg - 9) * 0.10)
+            ss = p.season_stats
+            if ss.get("gp", 0) >= 4:
+                tpg = ss.get("targets", 0) / ss["gp"]
+                f /= 1.0 + max(0.0, tpg - 8.5) * 0.26     # defenses scheme against a volume star
+            return f
+        for i, w in enumerate(wrs):
+            pr = prior_wr[i] * (0.55 + 0.45 * w.rating_at("WR") / 130.0) * busy(w)
+            if ptype == "screen":
+                pr *= 0.6
+            out.append((w, roles[i], pr))
+        for i, t in enumerate(tes):
+            pr = (1.0 if i == 0 else 0.40) * (0.55 + 0.45 * t.rating_at("TE") / 130.0) * busy(t)
+            if ptype == "deep":
+                pr *= 0.55
+            out.append((t, "TE1" if i == 0 else "TE2", pr))
+        if rb:
+            pr = 2.0 * (0.45 + 0.55 * rb.a("catching") / 65.0)
+            if ptype == "screen":
+                pr *= 2.6
+            elif ptype == "medium":
+                pr *= 0.35
+            elif ptype in ("deep", "hail"):
+                pr *= 0.08
+            out.append((rb, "RB", pr))
+        if fbp:
+            out.append((fbp, "FB", 0.15 if ptype in ("short", "screen") else 0.03))
+        return out
+
+    def _coverage_map(self, cands, cbs, ss, lbs, zone):
+        cov = {}
+        if len(cbs) >= 2 and (zone or not self.dfn.dgp.get("shadow", True)) and random.random() < 0.5:
+            cbs = [cbs[1], cbs[0]] + list(cbs[2:])     # corners play sides, not the man
+        cb_i = 0
+        pool_s = list(ss)
+        pool_lb = list(lbs)
+        for r, role, _ in cands:
+            if role.startswith("WR"):
+                if cb_i < len(cbs):
+                    cov[r.id] = cbs[cb_i]
+                    cb_i += 1
+                elif pool_s:
+                    cov[r.id] = pool_s.pop()
+                elif pool_lb:
+                    cov[r.id] = pool_lb.pop()
+        for r, role, _ in cands:
+            if r.id in cov:
+                continue
+            if role.startswith("TE"):
+                if pool_s and random.random() < 0.5:
+                    cov[r.id] = pool_s.pop(0)
+                elif pool_lb:
+                    cov[r.id] = pool_lb.pop(0)
+                elif pool_s:
+                    cov[r.id] = pool_s.pop(0)
+            else:
+                if pool_lb:
+                    cov[r.id] = pool_lb.pop(0)
+                elif pool_s:
+                    cov[r.id] = pool_s.pop(0)
+        return cov
+
+    def _openness(self, r, d, ptype, zone, blitz):
+        e = self.e
+        if ptype == "screen":
+            route = e(r, "agility") * 0.3 + e(r, "acceleration") * 0.3 + e(r, "catching") * 0.4
+        elif ptype == "short":
+            route = e(r, "short_route_running") * 0.45 + e(r, "separation") * 0.2 \
+                + e(r, "agility") * 0.2 + e(r, "release") * 0.15
+        elif ptype == "medium":
+            route = e(r, "medium_route_running") * 0.45 + e(r, "separation") * 0.2 \
+                + e(r, "speed") * 0.15 + e(r, "release") * 0.2
+        else:
+            route = e(r, "deep_route_running") * 0.35 + e(r, "speed") * 0.35 \
+                + e(r, "separation") * 0.15 + e(r, "release") * 0.15
+        if d is None:
+            cover = 35.0
+        elif zone:
+            cover = e(d, "zone_coverage") * 0.55 + e(d, "anticipation") * 0.2 \
+                + e(d, "play_recognition") * 0.1 + e(d, "speed") * 0.15
+        else:
+            cover = e(d, "man_coverage") * 0.55 + e(d, "press_technique") * 0.1 * (1 + self.rx["press"]) \
+                + e(d, "speed") * 0.15 + e(d, "agility") * 0.1 + e(d, "anticipation") * 0.1
+        if ptype == "deep" and d is not None:
+            cover += (e(d, "speed") - e(r, "speed")) * 0.25
+        o = (route - cover) * 0.72 + (4.0 if blitz else 0.0) + random.gauss(0, 9.0) + self.rx["openness"]
+        if ptype == "screen":
+            o += 6
+        return o
+
+    def _completion(self, qb, rec, dfnd, air, ptype, tacklers, pressured):
+        e = self.e
+        off = self.poss
+        to_goal = 100 - self.yl
+        yac_mean = {"screen": 5.5, "short": 3.45, "medium": 2.75, "deep": 3.0, "hail": 1.0}[ptype]
+        skill = e(rec, "speed") * 0.28 + e(rec, "agility") * 0.22 + e(rec, "break_tackle") * 0.18 \
+            + e(rec, "acceleration") * 0.17 + e(rec, "vision") * 0.15
+        tk = sum(e(t, "tackling") * 0.6 + e(t, "pursuit") * 0.4 for t in tacklers[:5]) \
+            / max(1, min(5, len(tacklers)))
+        m = max(0.8, yac_mean * (1 + (skill - tk) / 135.0))
+        yac = int(random.expovariate(1.0 / m))
+        brk = (0.016 + (e(rec, "speed") - 85) / 900.0 + (skill - tk) / 2000.0) * self.big_play
+        if ptype in ("screen", "short") and random.random() < max(0.004, brk):
+            yac += 10 + int(random.expovariate(1 / 18.0))
+        elif ptype in ("medium", "deep") and random.random() < max(0.004, brk * 1.3):
+            yac += 8 + int(random.expovariate(1 / 20.0))
+        yards = air + yac
+        if self.yl + yards >= 100:
+            yards = to_goal
+            yac = max(0, yards - air)
+        if self.yl + yards <= 0:
+            yards = -self.yl + 1
+        self.st(qb, "pass_cmp")
+        self.st(qb, "pass_yds", yards)
+        self.st(qb, "pass_long", yards)
+        self.st(rec, "rec")
+        self.st(rec, "rec_yds", yards)
+        self.st(rec, "rec_long", yards)
+        self.st(rec, "yac", yac)
+        if yards >= 20:
+            self.st(rec, "rec_20")
+        self.ts(off, "pass_cmp")
+        self.ts(off, "pass_yds", yards)
+        td = self.yl + yards >= 100
+        side = random.choice(["left", "middle", "right"])
+        depth = {"screen": "screen", "short": "short", "medium": "", "deep": "deep",
+                 "hail": "Hail Mary"}[ptype]
+        text = f"{_short(qb.name)} pass {depth} {side} to {_short(rec.name)}".replace("  ", " ")
+        out = {"kind": "pass", "yards": yards, "time": random.uniform(5, 7.5),
+               "clock_runs": True, "text": text, "carrier": rec, "td": td,
+               "complete": True, "qb": qb, "ptype": ptype, "air": air}
+        if td:
+            self.st(qb, "pass_td")
+            self.st(rec, "rec_td")
+            out["text"] += f" for {yards} yards, TOUCHDOWN"
+            return out
+        out["oob"] = random.random() < (0.26 if ptype != "screen" else 0.12) + \
+            (0.15 if self.urgency(off) == "hurry" else 0.0)
+        # Tackle & fumble
+        tackler = dfnd if (dfnd and random.random() < 0.55) else random.choice(tacklers[:6]) \
+            if tacklers else None
+        self._missed(tacklers, yac)
+        if not out["oob"]:
+            self._tackle(tackler, tacklers)
+        out["text"] += f" for {yards} yard{'s' if abs(yards) != 1 else ''}"
+        hit = (1.0 + (e(tackler, "hit_power") - 60) / 120.0) if tackler is not None else 1.0
+        if random.random() < 0.0075 * (1.5 - e(rec, "ball_security") / 100.0) * self.to_rate \
+                * self.wx["fumble"] * hit:
+            return self._fumble(out, rec, tackler)
+        return out
+
+    def _interception(self, qb, rec, dfnd, defenders, air, ptype):
+        e = self.e
+        picker = dfnd if dfnd and random.random() < 0.65 else random.choice(defenders[:6])
+        self.st(qb, "pass_int")
+        self.st(picker, "def_int")
+        self.st(picker, "pd")
+        self.ts(self.poss, "turnovers")
+        spot = _clip(self.yl + air, 1, 99)           # offence yard line
+        ret = max(0, int(random.gauss(7 + (e(picker, "speed") - 75) * 0.2, 9)))
+        if random.random() < 0.055 * self.big_play:
+            ret = spot
+        self.st(picker, "int_yds", min(ret, spot))
+        new_yl = (100 - spot) + ret
+        text = f"{_short(qb.name)} pass intended for {_short(rec.name)} INTERCEPTED by " \
+               f"{_short(picker.name)}"
+        if new_yl >= 100:
+            self.st(picker, "int_td")
+            self.st(picker, "def_td")
+            return {"kind": "pick6", "text": text + f", returned {spot} yards for a TOUCHDOWN",
+                    "time": 7, "clock_runs": False, "scorer": picker}
+        return {"kind": "turnover", "text": text + f" at the {self.spot(spot)}, returned {ret} yards",
+                "new_yl": new_yl, "time": 7, "clock_runs": False, "what": "Interception"}
+
+    def _fumble(self, out, carrier, forcer):
+        self.st(carrier, "fumbles")
+        if forcer:
+            self.st(forcer, "ff")
+        if random.random() < 0.52:
+            self.st(carrier, "fumbles_lost")
+            self.ts(self.poss, "turnovers")
+            rec_by = random.choice(self.dfn.lu["LB"][:2] + self.dfn.lu["S"][:2] +
+                                   self.dfn.lu["DT"][:2])
+            self.st(rec_by, "fr")
+            spot = _clip(self.yl + out.get("yards", 0), 1, 99)
+            if random.random() < 0.05 * self.big_play:
+                self.st(rec_by, "def_td")
+                return {"kind": "pick6", "time": 6, "clock_runs": False, "scorer": rec_by,
+                        "text": out["text"] + f" — FUMBLE recovered by {_short(rec_by.name)} "
+                                              f"and returned for a TOUCHDOWN",
+                        "pre_yards": out.get("yards", 0), "carrier_stats_done": True}
+            return {"kind": "turnover", "time": 6, "clock_runs": False,
+                    "new_yl": 100 - spot, "what": "Fumble",
+                    "text": out["text"] + f" — FUMBLE, recovered by {_short(rec_by.name)}",
+                    "pre_yards": out.get("yards", 0)}
+        out["text"] += " (fumbled, recovered by offense)"
+        return out
+
+    def _sack(self, qb, rushers):
+        sacker = self._weighted_rusher(rushers)
+        if random.random() < 0.22:
+            # Coverage sacks, delayed blitzes and clean-up by the second level
+            extra = self.dfn.lu["LB"][:2] + self.dfn.lu["S"][:1] + self.dfn.lu["CB"][:1]
+            if extra:
+                sacker = random.choice(extra)
+        loss = random.randint(4, 10)
+        loss = min(loss, self.yl - 1) if self.yl > 1 else 0
+        if random.random() < 0.12 and len(rushers) > 1:
+            other = self._weighted_rusher([r for r in rushers if r[0] is not sacker])
+            self.st(sacker, "sacks", 0.5)
+            self.st(other, "sacks", 0.5)
+            self.st(sacker, "tkl_ast")
+            self.st(other, "tkl_ast")
+            who = f"{_short(sacker.name)} and {_short(other.name)}"
+        else:
+            self.st(sacker, "sacks", 1)
+            self.st(sacker, "tkl_solo")
+            who = _short(sacker.name)
+        self.st(sacker, "tfl")
+        self.st(sacker, "qb_hits")
+        self.st(sacker, "pressures")
+        self.st(qb, "sacked")
+        self.st(qb, "sack_yds", loss)
+        self.ts(self.poss, "sacked")
+        self.ts(self.poss, "sack_yds", loss)
+        out = {"kind": "sack", "yards": -loss, "time": 6, "clock_runs": True,
+               "text": f"{_short(qb.name)} SACKED by {who} for -{loss}"}
+        if random.random() < 0.095 * (1.4 - self.e(qb, "ball_security") / 100.0) * self.to_rate:
+            out["text"] = f"{_short(qb.name)} SACKED by {who}"
+            return self._fumble(out, qb, sacker)
+        if self.yl - loss <= 0:
+            out["safety"] = True
+        return out
+
+    def _weighted_rusher(self, rushers):
+        ws = [max(5.0, max(self.e(p, "power_move"), self.e(p, "finesse_move")) + 100) * w
+              for p, w in rushers]
+        return random.choices([p for p, _ in rushers], weights=ws, k=1)[0]
+
+    # ── Run play ─────────────────────────────────────────────────────────────
+
+    # Run concepts: (blocking weights, bd bonus fn, yards sd mult, stuff add, big-play mult)
+    RUN_BLOCK = {
+        "inside zone":  {"run_block": 0.45, "impact_block": 0.20, "strength": 0.20, "awareness": 0.15},
+        "power":        {"run_block": 0.40, "pulling": 0.25, "strength": 0.25, "impact_block": 0.10},
+        "counter":      {"run_block": 0.35, "pulling": 0.35, "agility": 0.15, "awareness": 0.15},
+        "draw":         {"pass_block": 0.35, "run_block": 0.35, "awareness": 0.30},
+        "outside zone": {"run_block": 0.40, "pulling": 0.10, "agility": 0.30, "awareness": 0.20},
+        "toss":         {"run_block": 0.30, "agility": 0.35, "pulling": 0.20, "awareness": 0.15},
+        "jet sweep":    {"run_block": 0.30, "agility": 0.35, "pulling": 0.20, "awareness": 0.15},
+        "reverse":      {"run_block": 0.30, "agility": 0.35, "pulling": 0.20, "awareness": 0.15},
+    }
+    RUN_BLOCK.update({
+        "trap":          {"run_block": 0.35, "pulling": 0.30, "impact_block": 0.20, "awareness": 0.15},
+        "lead":          {"run_block": 0.45, "impact_block": 0.25, "strength": 0.30},
+        "buck sweep":    {"run_block": 0.30, "pulling": 0.40, "agility": 0.15, "awareness": 0.15},
+        "zone read":     {"run_block": 0.45, "impact_block": 0.15, "strength": 0.15, "awareness": 0.25},
+        "inverted veer": {"run_block": 0.35, "pulling": 0.30, "strength": 0.15, "awareness": 0.20},
+        "triple option": {"run_block": 0.40, "agility": 0.25, "awareness": 0.35},
+        "midline":       {"run_block": 0.40, "strength": 0.25, "impact_block": 0.15, "awareness": 0.20},
+        "speed option":  {"run_block": 0.35, "agility": 0.35, "awareness": 0.30},
+    })
+    OUTSIDE = ("outside zone", "toss", "jet sweep", "reverse", "buck sweep", "speed option")
+    OPTION = ("zone read", "inverted veer", "triple option", "midline", "speed option")
+
+    def _call_label(self, call, pa):
+        if call.get("trick") == "flea":
+            return "flea-flicker "
+        if call.get("rpo"):
+            return "RPO "
+        return "play-action " if pa else ""
+
+    def _run_concept(self, plan, dplan, wrs, scheme=None, qb=None, fbp=None):
+        to_goal = 100 - self.yl
+        short = self.togo <= 2 or to_goal <= 3
+        out = plan["outside"]
+        mob = _clip((self.e(qb, "speed") - 66) / 22.0, 0.0, 1.4) if qb is not None else 0.5
+        w = {
+            "trap": 0.10,
+            "lead": 0.04 + (0.45 if fbp is not None else 0.0) * (0.5 + plan["heavy"]),
+            "zone read": (0.03 + 0.55 * plan["qb_run"]) * mob,
+            "inverted veer": (0.01 + 0.20 * plan["qb_run"]) * mob,
+            "speed option": (0.005 + 0.08 * plan["qb_run"]) * mob,
+        }
+        w.update({
+            "inside zone": 1.0 + 0.6 * (1.0 - out),
+            "outside zone": 0.30 + 1.10 * out,
+            "power": 0.25 + 0.70 * plan["heavy"] + (0.8 if short else 0.0),
+            "counter": 0.15 + 0.25 * plan["trick"],
+            "draw": 0.06 + (0.55 if self.down >= 2 and self.togo >= 7 else 0.0)
+            + 0.25 * max(0.0, plan["pass_rate"] - 0.5),
+            "toss": 0.06 + 0.25 * out,
+        })
+        for k, add in pb.SCHEME_RUNS.get(scheme, {}).items():
+            if k in self.OPTION and k not in ("triple option", "midline"):
+                add *= max(0.25, mob)
+            w[k] = max(0.02 if k in w else 0.0, w.get(k, 0.0) + add)
+        prefs = getattr(self.poss.team, "play_prefs", None) or {}
+        if prefs:
+            for k in list(w):
+                w[k] *= prefs.get("run:" + k, 1.0)
+        fast = max(wrs, key=lambda p: p.a("speed")) if wrs else None
+        if fast is not None and fast.a("speed") >= 86 and not short:
+            w["jet sweep"] = 0.015 + 0.06 * out * (0.5 + plan["trick"])
+        if short:
+            for k in ("draw", "speed option", "toss", "buck sweep"):
+                if k in w:
+                    w[k] *= 0.4
+        if to_goal <= 3:
+            gl = {"inside zone": 1.0, "power": 1.4, "toss": 0.15, "lead": 0.5 if fbp is not None else 0.0}
+            for k in ("midline", "triple option", "zone read", "trap", "buck sweep"):
+                if w.get(k, 0) > 0.3:
+                    gl[k] = w[k]
+            w = gl
+        keys = list(w)
+        return random.choices(keys, weights=[w[k] for k in keys], k=1)[0], fast
+
+    def run_play(self, call=None):
+        call = call or {}
+        e = self.e
+        off, de = self.poss, self.dfn
+        plan = off.plan
+        qb = off.qb
+        pers = self._personnel()
+        wrs, tes, rb, fbp = self._formation(pers)
+        dts, edges, lbs, cbs, ss = self._defense_set(len(wrs))
+        self._snap_units([qb] + off.ol + wrs + tes + [rb, fbp], dts + edges + lbs + cbs + ss)
+        self.ts(off, "plays")
+        slot_of = self._slot_map(pers, wrs, tes, rb, fbp)
+        dc = self._def_call(len(cbs))
+        if self.diagrams:
+            gun = 0.25 + 0.5 * plan["tempo"] + 0.3 * plan["qb_run"]
+            self.cur_diag = {"form": pb.choose_formation(pers, run=True, gun_bias=min(1.0, gun),
+                                                         scheme=off.team.coach.off_scheme),
+                             "pers": pers, "mirror": False, "routes": {},
+                             "names": {s: (p.jersey, _short(p.name)) for s, p in slot_of.items()},
+                             "cov": dc["cov"], "front": dc["front"], "blitz": dc["blitz"],
+                             "dcall": dc["name"], "n_lb": len(lbs), "n_cb": len(cbs), "n_s": len(ss),
+                             "dir": random.choice([-1, 1])}
+
+        if not call:
+            # Designed QB run?
+            qb_mob = (e(qb, "speed") - 65) / 30.0
+            if random.random() < plan["qb_run"] * 0.19 * _clip(0.5 + qb_mob, 0.2, 1.6):
+                if self.cur_diag is not None:
+                    self.cur_diag.update(run="qb run", carrier="QB", play="QB Keeper")
+                return self._qb_run(qb, scramble=False, lbs=lbs, ss=ss, dts=dts)
+            if self.togo <= 1 and self.down >= 3 and random.random() < 0.35:
+                if self.cur_diag is not None:
+                    self.cur_diag.update(run="sneak", carrier="QB", play="QB Sneak", dir=1)
+                return self._qb_sneak(qb, dts + edges + lbs)
+
+        scheme = off.team.coach.off_scheme
+        concept, fast = self._run_concept(plan, de.plan, wrs, scheme=scheme, qb=qb, fbp=fbp)
+        self._ocall = concept
+        if call.get("concept"):
+            concept = call["concept"]
+        elif call.get("rpo"):
+            concept = "inside zone" if random.random() < 0.65 else "outside zone"
+        carrier = rb
+        if concept in ("jet sweep", "reverse"):
+            carrier = fast or (wrs[0] if wrs else rb)
+        elif concept == "lead" and fbp is not None and random.random() < 0.06:
+            carrier = fbp
+        elif concept in ("midline", "triple option") and fbp is not None:
+            carrier = fbp                       # the fullback / B-back takes the dive
+        elif fbp and random.random() < (0.30 if concept in ("trap", "buck sweep") and scheme == "Wing-T"
+                                        else 0.10):
+            carrier = fbp
+        if carrier is None:
+            carrier = qb
+        outside = concept in self.OUTSIDE
+        path_key = concept
+
+        # Option football: the QB reads an unblocked defender and gives, keeps or pitches
+        read_edge = 0.0
+        option_note = ""
+        if concept in self.OPTION and carrier is not qb:
+            key = edges[0] if edges else (lbs[0] if lbs else None)
+            iq = (e(key, "play_recognition") - 65) / 200.0 if key is not None else 0.0
+            sharp = _clip(0.60 + (e(qb, "decision_making") - 62) / 75.0 - iq, 0.45, 0.94)
+
+            def read(take_qb_rate):
+                crash = random.random() < take_qb_rate      # key defender takes the give
+                if random.random() < sharp:
+                    return crash, False
+                keep_ = (not crash) and random.random() < 0.5
+                return keep_, (crash and not keep_) or (not crash and keep_)
+
+            keep, bad = read(0.32 if concept != "speed option" else 0.55)
+            if concept == "zone read":
+                if keep:
+                    carrier, outside, path_key = qb, True, "keep"
+            elif concept == "inverted veer":
+                if keep:
+                    carrier, outside, path_key = qb, False, "veer keep"
+                else:
+                    outside = True
+            elif concept == "midline":
+                if keep:
+                    carrier, path_key = qb, "veer keep"
+            elif concept == "speed option":
+                if keep:
+                    carrier, outside, path_key = qb, False, "veer keep"
+                else:
+                    path_key = "pitch"
+            elif concept == "triple option":
+                if keep:
+                    # second read: the pitch key
+                    pitch, bad2 = read(0.5)
+                    bad = bad and bad2
+                    if pitch:
+                        pitch_man = fast or rb
+                        if pitch_man is carrier:
+                            pitch_man = rb if rb is not carrier else None
+                        if pitch_man is not None:
+                            carrier, outside, path_key = pitch_man, True, "pitch"
+                        else:
+                            carrier, outside, path_key = qb, True, "keep"
+                    else:
+                        carrier, outside, path_key = qb, True, "keep"
+                else:
+                    path_key = "dive"
+            read_edge = -0.35 if bad else 0.40
+            option_note = {True: " (keep)", False: ""}[carrier is qb]
+            if path_key == "pitch":
+                option_note = " (pitch)"
+        if self.cur_diag is not None:
+            cslot = next((s for s, p in slot_of.items() if p is carrier), "QB")
+            self.cur_diag.update(run=path_key if path_key in pb.RUN_PATHS else concept, carrier=cslot,
+                                 play=("RPO " if call.get("rpo") else "") + concept.title() + option_note)
+
+        wts = self.RUN_BLOCK[concept]
+        blk = sum(sum(e(p, a) * k for a, k in wts.items()) for p in off.ol) / max(1, len(off.ol))
+        for t in tes:
+            blk += (e(t, "run_block") - 55) * 0.05
+        if fbp and carrier is not fbp:
+            blk += (e(fbp, "run_block") - 55) * (0.09 if concept == "power" else 0.06)
+        blk += (staff_mod.off_calling(off.team) - 10) * 0.3
+
+        front = dts + edges
+        dline = sum(e(p, "run_stop") * 0.35 + e(p, "block_shedding") * 0.30
+                    + e(p, "strength") * 0.20 + e(p, "gap_awareness") * 0.15
+                    for p in front) / max(1, len(front))
+        lbv = sum(e(p, "play_recognition") * 0.30 + e(p, "tackling") * 0.25
+                  + e(p, "block_shedding") * 0.20 + e(p, "pursuit") * 0.25
+                  for p in lbs) / max(1, len(lbs))
+        dv = dline * 0.62 + lbv * 0.38
+        box = {1: -5.0, 2: -2.5, 3: 0.0, 4: 1.5}.get(len(lbs), 0.0)
+        box += dfn_lib.run_edge(dc, inside=not outside) + dc["box"] * 1.3
+        dv += box + (staff_mod.def_calling(de.team) - 10) * 0.3
+        bd = (blk - dv) / 28.0
+
+        # Concept-specific edges
+        sd_mult, stuff_add, big_mult, mean_add = 1.0, 0.0, 1.0, 0.0
+        pass_down = self.down >= 2 and self.togo >= 7
+        if concept == "power":
+            bd += 0.30 if len(lbs) <= 2 else -0.05
+            sd_mult, big_mult = 0.85, 0.85
+            if self.togo <= 2:
+                stuff_add -= 0.03
+        elif concept == "counter":
+            bd += 0.55 if dc["blitz"] else -0.05
+            sd_mult, stuff_add, big_mult = 1.2, 0.02, 1.25
+        elif concept == "draw":
+            bd += 0.80 if pass_down else -0.55
+            if dc["blitz"] or dc["rush"] == 3:
+                bd += 0.4
+            sd_mult, big_mult = 1.1, 1.1
+        elif concept == "outside zone":
+            sd_mult, stuff_add, big_mult = 1.12, 0.02, 1.15
+        elif concept == "toss":
+            sd_mult, stuff_add, big_mult = 1.3, 0.05, 1.40
+        elif concept in ("jet sweep", "reverse"):
+            sd_mult, stuff_add, big_mult, mean_add = 1.3, 0.04, 1.65, -0.6
+            if concept == "reverse":
+                stuff_add += 0.10
+                big_mult = 2.2
+        elif concept == "trap":
+            # the trapped defender is invited upfield; aggressive fronts get punished
+            bd += 0.05 + (0.50 if dc["blitz"] or dc["stunt"] else 0.0)
+            sd_mult, stuff_add, big_mult = 1.05, 0.01, 1.05
+        elif concept == "lead":
+            bd += 0.15 if fbp is not None else -0.2
+            sd_mult, big_mult = 0.85, 0.85
+            if self.togo <= 2:
+                stuff_add -= 0.02
+        elif concept == "buck sweep":
+            bd += 0.15
+            sd_mult, stuff_add, big_mult = 1.2, 0.03, 1.25
+        elif concept in self.OPTION:
+            bd += read_edge
+            sd_mult, big_mult = 1.15, 1.25
+            if concept == "midline":
+                sd_mult, big_mult = 0.9, 0.9
+                if self.togo <= 2:
+                    stuff_add -= 0.03
+            elif path_key == "pitch":
+                sd_mult, stuff_add, big_mult = 1.35, 0.04, 1.45
+        if dc["blitz"]:
+            # run blitz: more plays blown up in the backfield, but a missed gap goes a long way
+            stuff_add += 0.03
+            big_mult *= 1.2
+        elif dc["stunt"]:
+            stuff_add += 0.01
+            big_mult *= 1.1
+        if call.get("rpo"):
+            bd += 0.35
+
+        if outside:
+            rskill = e(carrier, "speed") * 0.24 + e(carrier, "acceleration") * 0.18 \
+                + e(carrier, "agility") * 0.14 + e(carrier, "vision") * 0.18 \
+                + e(carrier, "juke_spin") * 0.12 + e(carrier, "break_tackle") * 0.14
+        else:
+            rskill = e(carrier, "vision") * 0.24 + e(carrier, "break_tackle") * 0.18 \
+                + e(carrier, "contact_balance") * 0.18 + e(carrier, "strength") * 0.10 \
+                + e(carrier, "acceleration") * 0.14 + e(carrier, "juke_spin") * 0.08 \
+                + e(carrier, "stiff_arm") * 0.08
+        tacklers = lbs + ss + cbs[:2]
+        tk = sum(e(t, "tackling") * 0.6 + e(t, "pursuit") * 0.4 for t in tacklers[:5]) \
+            / max(1, min(5, len(tacklers)))
+        rd = (rskill - tk) / 27.0
+
+        to_goal = 100 - self.yl
+        p_stuff = _clip(0.170 - 0.065 * bd - 0.025 * rd + stuff_add
+                        + (0.10 if to_goal <= 5 else 0.0), 0.05, 0.45)
+        if random.random() < p_stuff:
+            yards = random.choices([0, -1, -2, -3, -4], weights=[40, 25, 18, 10, 7])[0]
+            if concept == "reverse":
+                yards -= random.randint(1, 5)
+        else:
+            # A short, sure gain plus a long-tailed "what he makes of it" part: most runs go
+            # for 1-5 yards, a few break for 10+ (NFL shape: median 3, mean ~4.3)
+            push = self.togo <= 2 or to_goal <= 4         # short yardage: a pile-driving gain
+            if push:
+                base = max(0.5, random.gauss(2.6 + 0.6 * mean_add + 0.6 * bd, 1.0 * sd_mult))
+                ext_m = 1.9
+            else:
+                base = max(0.5, random.gauss(2.4 + 0.6 * mean_add + 0.55 * bd - (0.4 if to_goal <= 10 else 0.0),
+                                             1.3 * sd_mult))
+                ext_m = 3.4 * (0.8 if to_goal <= 10 else 1.0)
+            extra = random.expovariate(1.0 / max(0.6, (ext_m + 0.70 * rd + 0.45 * bd) * sd_mult ** 0.5))
+            yards = (base + extra) * self.run_mult
+            brk = (0.026 + 0.009 * rd + 0.006 * bd + (e(carrier, "speed") - 85) / 1100.0) \
+                * self.big_play * big_mult
+            if random.random() < max(0.004, brk):
+                yards += 9 + random.expovariate(1 / 14.0) * (e(carrier, "speed") / 88.0)
+            yards = int(yards)
+        yards = min(yards, to_goal)
+        if self.yl + yards <= 0:
+            yards = -self.yl
+        side = random.choice(["left", "right"])
+        if concept in ("inside zone", "power", "counter", "draw"):
+            label = {"inside zone": random.choice(["up the middle", f"inside zone {side}"]),
+                     "power": f"power {side}", "counter": f"counter {side}",
+                     "draw": "draw up the middle"}[concept]
+        elif concept in self.OPTION:
+            label = f"{concept} {side}" + option_note
+        else:
+            label = f"{concept} {side}"
+        if call.get("rpo"):
+            label = "RPO handoff, " + label
+        return self._finish_run(carrier, yards, outside, tacklers, dts + edges + lbs, label=label)
+
+    # ── RPOs, trick plays and fakes ──────────────────────────────────────────
+
+    def _rpo(self):
+        """Run-pass option: the quarterback reads the conflict defender."""
+        qb = self.poss.qb
+        dplan = self.dfn.plan
+        loaded_box = random.random() < _clip(0.62 - 0.45 * dplan["two_high"] + 0.15 * dplan["blitz"],
+                                             0.1, 0.9)
+        good_read = random.random() < _clip(0.55 + (self.e(qb, "decision_making") - 60) / 90.0, 0.4, 0.92)
+        throw = loaded_box if good_read else not loaded_box
+        if throw:
+            return self.pass_play(call={"rpo": True} if good_read else {"rpo_bad": True})
+        return self.run_play(call={"rpo": True} if good_read else {"concept": "inside zone"})
+
+    def _trick_play(self):
+        r = random.random()
+        if r < 0.55:
+            return self.pass_play(call={"trick": "flea"})
+        return self.run_play(call={"concept": "reverse"})
+
+    def _fake_ok(self):
+        plan = self.poss.plan
+        if self.togo > 5 or self.quarter >= 5:
+            return False
+        if self.quarter == 4 and self.clock < 120:
+            return False
+        return random.random() < 0.06 * plan["trick"] * self.go_mult * (1.4 if self.togo <= 2 else 1.0)
+
+    def _fake_kick(self, kind):
+        """Fake punt or fake field goal: a run by the up-back or a pass from the holder."""
+        off = self.poss
+        self.ts(off, "plays")
+        self.ts(off, "fakes")
+        rc = self.st_def
+        self.st_def = None
+        watch = {"Punt Block": 0.15, "Punt Safe": -0.25, "Field Goal Block": 0.10,
+                 "Field Goal Safe": -0.20}.get(rc, 0.0)
+        surprise = _clip(0.58 + watch + random.gauss(0, 0.12)
+                         - 0.15 * self.dfn.team.coach.r("game_management") / 20.0, 0.15, 0.85)
+        what = "FAKE PUNT" if kind == "punt" else "FAKE FIELD GOAL"
+        to_goal = 100 - self.yl
+        if kind == "punt" or random.random() < 0.4:
+            runner = (off.lu["RB"][1:2] or off.lu["FB"][:1] or off.lu["RB"][:1] or [off.qb])[0]
+            yards = int(random.gauss(self.togo + 2.5, 4.0)) if random.random() < surprise \
+                else random.choice([-2, -1, 0, 1, max(0, self.togo - 1)])
+            yards = min(yards, to_goal)
+            out = self._finish_run(runner, yards, True, self.dfn.lu["LB"][:2] + self.dfn.lu["S"][:2],
+                                   self.dfn.lu["DT"][:2] + self.dfn.lu["LB"][:1], label=f"{what}, keeps it")
+            return out
+        holder = off.lu["P"][0]
+        tgt = (off.lu["TE"][:1] or off.lu["RB"][:1] or off.lu["WR"][:1])[0]
+        self.st(holder, "pass_att")
+        self.ts(off, "pass_att")
+        self.st(tgt, "targets")
+        if random.random() < surprise * 0.95:
+            yards = min(to_goal, max(self.togo, int(random.gauss(self.togo + 6, 5))))
+            self.st(holder, "pass_cmp")
+            self.st(holder, "pass_yds", yards)
+            self.st(tgt, "rec")
+            self.st(tgt, "rec_yds", yards)
+            self.ts(off, "pass_cmp")
+            self.ts(off, "pass_yds", yards)
+            td = self.yl + yards >= 100
+            if td:
+                self.st(holder, "pass_td")
+                self.st(tgt, "rec_td")
+            return {"kind": "pass", "yards": yards, "time": 6, "clock_runs": True, "carrier": tgt,
+                    "td": td, "complete": True, "ptype": "short", "air": yards,
+                    "text": f"{what}! {_short(holder.name)} pass to {_short(tgt.name)} for {yards} yards"
+                            + (", TOUCHDOWN" if td else "")}
+        return {"kind": "pass", "yards": 0, "clock_runs": False, "time": 6, "incomplete": True,
+                "ptype": "short", "air": 5,
+                "text": f"{what}! {_short(holder.name)} pass to {_short(tgt.name)} incomplete"}
+
+    def _finish_run(self, carrier, yards, outside, tacklers, front, label=None):
+        off = self.poss
+        if self._spy_on and carrier is not None and carrier.position == "QB" and yards > 2:
+            yards = int(yards * 0.7)              # the spy was waiting for him
+        if self._adv is None:
+            self._adv = {"rusher": carrier}
+        self.st(carrier, "rush_att")
+        self.st(carrier, "rush_yds", yards)
+        self.st(carrier, "rush_long", yards)
+        if yards >= 20:
+            self.st(carrier, "rush_20")
+        self.ts(off, "rush_att")
+        self.ts(off, "rush_yds", yards)
+        direction = label or (random.choice(["left end", "right end", "left tackle", "right tackle"])
+                              if outside else random.choice(["up the middle", "left guard",
+                                                             "right guard"]))
+        text = f"{_short(carrier.name)} rush {direction}"
+        td = self.yl + yards >= 100
+        out = {"kind": "run", "yards": yards, "time": random.uniform(4.5, 6.5),
+               "clock_runs": True, "carrier": carrier, "td": td, "text": text}
+        if td:
+            self.st(carrier, "rush_td")
+            out["text"] += f" for {yards} yard{'s' if yards != 1 else ''}, TOUCHDOWN"
+            return out
+        if yards < 0 and self.yl + yards <= 0:
+            out["safety"] = True
+        out["oob"] = random.random() < (0.17 if outside else 0.04)
+        if yards <= 2:
+            pool = front
+        elif yards <= 9:
+            pool = tacklers[:4] + front[-2:]
+        else:
+            pool = tacklers[-4:]
+        tackler = random.choice(pool) if pool else None
+        self._missed(tacklers, yards)
+        if not out["oob"]:
+            self._tackle(tackler, pool, tfl=yards < 0)
+        out["text"] += f" for {yards} yard{'s' if abs(yards) != 1 else ''}"
+        hit = (1.0 + (self.e(tackler, "hit_power") - 60) / 120.0) if tackler is not None else 1.0
+        if random.random() < 0.0185 * (1.45 - self.e(carrier, "ball_security") / 100.0) \
+                * self.to_rate * self.wx["fumble"] * hit:
+            return self._fumble(out, carrier, tackler)
+        return out
+
+    def _qb_sneak(self, qb, front):
+        e = self.e
+        push = (sum(e(p, "strength") + e(p, "run_block") for p in self.poss.ol) / 10.0
+                - sum(e(p, "strength") + e(p, "run_stop") for p in front[:4]) / 8.0)
+        p = _clip(0.80 + push / 120.0 + (e(qb, "strength") - 55) / 400.0, 0.55, 0.95)
+        yards = random.choice([1, 1, 1, 2, 2, 3]) if random.random() < p else random.choice([0, 0, -1])
+        yards = min(yards, 100 - self.yl)
+        return self._finish_run(qb, yards, False, front, front, label="sneak")
+
+    def _qb_run(self, qb, scramble, lbs=None, ss=None, dts=None):
+        e = self.e
+        de = self.dfn
+        lbs = lbs if lbs is not None else de.lu["LB"][:2]
+        ss = ss if ss is not None else de.lu["S"][:2]
+        dts = dts if dts is not None else de.lu["DT"][:2]
+        spd = e(qb, "speed")
+        mean = 3.6 + (spd - 70) / 5.5 + (2.0 if scramble else 0.0)
+        yards = random.gauss(mean, 4.0)
+        if random.random() < (0.035 + (spd - 80) / 300.0) * self.big_play:
+            yards += 10 + random.expovariate(1 / 14.0)
+        yards = int(max(-3, yards))
+        yards = min(yards, 100 - self.yl)
+        if self.yl + yards <= 0:
+            yards = -self.yl
+        if scramble:
+            self.ts(self.poss, "scrambles")
+        label = "scrambles" if scramble else random.choice(["keeper left", "keeper right",
+                                                           "option right", "draw"])
+        out = self._finish_run(qb, yards, True, lbs + ss, dts + lbs, label=label)
+        out["oob"] = out.get("oob") or (random.random() < 0.35)
+        return out
+
+    def _missed(self, pool, gain):
+        """On a big gain somebody usually whiffed: blame falls on the poorer tacklers."""
+        if gain < 6 or not pool or random.random() > 0.55 + min(0.4, gain / 60.0):
+            return
+        w = [max(1.0, 105.0 - self.e(p, "tackling")) for p in pool[:6]]
+        self.st(random.choices(pool[:6], weights=w, k=1)[0], "missed_tkl")
+
+    def _tackle(self, tackler, pool, tfl=False):
+        self._last_tackler = tackler
+        if tackler is None:
+            return
+        if random.random() < 0.28 and len(pool) > 1:
+            other = random.choice([p for p in pool if p is not tackler])
+            self.st(tackler, "tkl_ast")
+            self.st(other, "tkl_ast")
+        else:
+            self.st(tackler, "tkl_solo")
+        if tfl:
+            self.st(tackler, "tfl")
+        self._injury_check(tackler, 0.5)
+
+    # ── Resolving a play ─────────────────────────────────────────────────────
+
+    def resolve(self, out):
+        off = self.poss
+        kind = out["kind"]
+        if self.cur_diag is not None:
+            d = self.cur_diag
+            d["kind"] = kind
+            d["yards"] = out.get("yards", 0)
+            d["td"] = bool(out.get("td"))
+            d["inc"] = bool(out.get("incomplete"))
+            if kind in ("turnover", "pick6"):
+                d["to"] = out.get("what", "Interception" if "INTERCEPT" in out.get("text", "") else "Turnover")
+            if kind == "sack":
+                d["sack"] = True
+        if self.drive is not None and kind not in ("pick6",):
+            self.drive["yards"] += out.get("yards", 0)
+
+        # Post-snap penalties
+        if kind in ("run", "pass", "sack") and self._post_snap_penalty(out):
+            return
+        if self.down == 3:
+            self.ts(off, "third_att")
+        elif self.down == 4:
+            self.ts(off, "fourth_att")
+
+        if kind == "pick6":
+            self._end_drive("Turnover TD")
+            scorer_side = self.dfn
+            self.swing(scorer_side, 0.20)
+            self.run_clock(out["time"], False)
+            self.log(out["text"], "play")
+            self.poss, self.dfn = self.dfn, self.poss
+            self.add_score(scorer_side, 6, f"{_short(out['scorer'].name)} defensive TOUCHDOWN")
+            self._after_td(scorer_side)
+            return
+        if kind == "turnover":
+            self.log(out["text"], "play")
+            self.swing(self.dfn, 0.40)
+            self.run_clock(out["time"], False)
+            self.turnover_on_spot(out["what"], out["new_yl"])
+            return
+
+        yards = out.get("yards", 0)
+        self.log(out["text"], "play")
+        if kind == "sack":
+            self.swing(self.dfn, 0.10)
+        elif yards >= 40:
+            self.swing(off, 0.25)
+        elif yards >= 20:
+            self.swing(off, 0.13)
+        carrier = out.get("carrier")
+        if carrier is not None:
+            self._injury_check(carrier, 1.0)
+        if kind == "sack":
+            self._injury_check(off.qb, 0.8 * self.rx["qb_injury"])
+        elif kind == "pass" and out.get("complete") is None and random.random() < 0.05:
+            self._injury_check(off.qb, 0.3)
+        if random.random() < 0.25:
+            self._injury_check(random.choice(off.ol), 0.35)
+
+        if out.get("safety"):
+            self.run_clock(out["time"], False)
+            self._end_drive("Safety")
+            scoring = self.dfn
+            self.add_score(scoring, 2, "SAFETY")
+            self._ot_check()
+            if not self.game_over:
+                # Free kick from the 20
+                self.poss, self.dfn = off, scoring
+                self.yl = 20
+                p = off.lu["P"][0]
+                dist = int(random.gauss(45 + (self.e(p, "punt_power") - 70) * 0.15, 5))
+                self._start_drive(scoring, _clip(100 - 20 - dist + random.randint(5, 15), 15, 50))
+            return
+
+        if out.get("td"):
+            self.run_clock(out["time"], False)
+            self._end_drive("Touchdown")
+            self.add_score(off, 6, out["text"])
+            self._after_td(off)
+            return
+
+        self.yl += yards
+        self.togo -= yards
+        clock_runs = out.get("clock_runs", True)
+        if out.get("incomplete"):
+            clock_runs = False
+        if self.togo <= 0:
+            self._first_down()
+            if self.down == 1 and self.prev_down == 3:
+                self.ts(off, "third_conv")
+            elif self.down == 1 and self.prev_down == 4:
+                self.ts(off, "fourth_conv")
+        else:
+            self.prev_down = self.down
+            self.down += 1
+        self.run_clock(out["time"], clock_runs, out.get("oob", False))
+        if self.down > 4:
+            self.swing(self.dfn, 0.30)
+            self.log(f"Turnover on downs", "note")
+            self.turnover_on_spot("Downs")
+
+    prev_down = 1
+
+    def _first_down(self, penalty=False):
+        self.prev_down = self.down
+        self.down = 1
+        to_goal = 100 - self.yl
+        self.togo = min(10, to_goal)
+        self.ts(self.poss, "first_downs")
+        if penalty:
+            self.ts(self.poss, "first_downs_pen")
+
+    def _post_snap_penalty(self, out):
+        rate = 0.058 * self.pen_rate
+        off_disc = 1.35 - self.poss.disc / 100.0 * 0.7
+        def_disc = 1.35 - self.dfn.disc / 100.0 * 0.7
+        r = random.random()
+        yards = out.get("yards", 0)
+        hold = self.rx["holding"]
+        if r < rate * off_disc * 0.52 * hold:
+            # Offensive holding / OPI — negates the play (declined if the play lost yards)
+            if yards <= 0 and out["kind"] != "pass":
+                return False
+            is_pass = out["kind"] == "pass"
+            if is_pass and random.random() < 0.25 and out.get("ptype") in ("medium", "deep"):
+                name, p = "Offensive pass interference", out.get("carrier") or self.poss.lu["WR"][0]
+            else:
+                name, p = "Offensive holding", random.choice(self.poss.ol + self.poss.lu["TE"][:1])
+            yds = 10 if self.yl > 20 else max(1, self.yl // 2)
+            self._undo_play_stats(out)
+            self._penalty(self.poss, p, name, yds)
+            self.log(f"{out['text']} — PENALTY: {name}, {self.poss.abbr} "
+                     f"({_short(p.name)}), {yds} yards, replay down", "play")
+            self.yl -= yds
+            self.togo += yds
+            self.run_clock(out["time"], False)
+            return True
+        if r < rate * (off_disc * 0.52 * hold + def_disc * 0.48):
+            is_pass = out["kind"] == "pass"
+            if is_pass and out.get("incomplete") and out.get("air", 0) >= 8 and \
+                    random.random() < 0.55 * self.rx["dpi"]:
+                name = "Defensive pass interference"
+                p = out.get("def") or random.choice(self.dfn.lu["CB"][:2])
+                yds = max(1, min(out.get("air", 10), 99 - self.yl))
+                if self.yl + yds >= 100:
+                    yds = max(1, 99 - self.yl)
+            else:
+                name = random.choices(["Defensive holding", "Illegal contact", "Unnecessary roughness",
+                                       "Roughing the passer", "Face mask"],
+                                      weights=[1, 1, 1, self.rx["roughing"], 1])[0] if is_pass else \
+                    random.choice(["Face mask", "Unnecessary roughness", "Defensive holding"])
+                p = random.choice(self.dfn.lu["CB"][:2] + self.dfn.lu["LB"][:2] + self.dfn.lu["EDGE"][:2])
+                yds = 5 if name in ("Defensive holding", "Illegal contact") else 15
+                # Declined if the play gained more and moved the chains
+                if yards >= yds and yards >= self.togo and name in ("Defensive holding", "Illegal contact"):
+                    return False
+                if name in ("Unnecessary roughness", "Face mask", "Roughing the passer") \
+                        and not out.get("incomplete") and out["kind"] != "sack":
+                    # Added to the end of the play
+                    if self.yl + yards + yds >= 100:
+                        yds = max(1, (100 - self.yl - yards) // 2)
+                    self._penalty(self.dfn, p, name, yds)
+                    out["text"] += f" (+{yds} {name}, {self.dfn.abbr})"
+                    out["yards"] = yards + yds
+                    out["penalty_first"] = True
+                    out["td"] = out.get("td") or self.yl + out["yards"] >= 100
+                    if not out["td"]:
+                        self.togo = min(self.togo, yards + yds)
+                    return False
+            if self.yl + yds >= 100:
+                yds = max(1, (100 - self.yl) // 2)
+            self._undo_play_stats(out)
+            self._penalty(self.dfn, p, name, yds)
+            self.log(f"{out['text']} — PENALTY: {name}, {self.dfn.abbr} "
+                     f"({_short(p.name)}), {yds} yards, automatic first down", "play")
+            self.yl += yds
+            self._first_down(penalty=True)
+            self.run_clock(out["time"], False)
+            return True
+        return False
+
+    def _undo_play_stats(self, out):
+        """A penalty wiped out the play — remove what it added to the stat sheet."""
+        self._adv_void = True
+        y = out.get("yards", 0)
+        kind = out["kind"]
+        ps = self.res.player_stats
+        if kind == "run" and out.get("carrier"):
+            c = ps.get(out["carrier"].id)
+            if c:
+                c["rush_att"] -= 1
+                c["rush_yds"] -= y
+            self.ts(self.poss, "rush_att", -1)
+            self.ts(self.poss, "rush_yds", -y)
+        elif kind == "pass":
+            qb = self.poss.qb
+            q = ps.get(qb.id)
+            if q:
+                q["pass_att"] -= 1
+                if out.get("complete"):
+                    q["pass_cmp"] -= 1
+                    q["pass_yds"] -= y
+            self.ts(self.poss, "pass_att", -1)
+            if out.get("complete"):
+                self.ts(self.poss, "pass_cmp", -1)
+                self.ts(self.poss, "pass_yds", -y)
+                c = ps.get(out["carrier"].id)
+                if c:
+                    c["rec"] -= 1
+                    c["rec_yds"] -= y
+                    c["targets"] -= 1
+        elif kind == "sack":
+            q = ps.get(self.poss.qb.id)
+            if q:
+                q["sacked"] -= 1
+                q["sack_yds"] += y
+            self.ts(self.poss, "sacked", -1)
+            self.ts(self.poss, "sack_yds", y)
+        if self.drive is not None:
+            self.drive["yards"] -= y
+
+    # ── Injuries ─────────────────────────────────────────────────────────────
+
+    def _injury_check(self, player, exposure):
+        if player is None or player.is_injured or self.inj_rate <= 0:
+            return
+        res = player.a("injury_resistance")
+        tired = 1.0 + max(0.0, 80.0 - self.energy_of(player)) / 60.0     # tired bodies break down
+        p = 0.0125 * exposure * (1.55 - res / 100.0) * self.inj_rate * tired
+        if random.random() >= p:
+            return
+        weeks_left = 17
+        inj = roll_injury(player, weeks_left)
+        player.injury = inj
+        side = self.home if player.team == self.home.abbr else self.away
+        self.res.injuries.append((player.id, player.name, side.abbr, inj["name"], inj["weeks"]))
+        self.log(f"INJURY: {player.name} ({player.position}, {side.abbr}) — {inj['name']}", "note")
+        side.refresh_lineup()
+
+    # ── Finish ───────────────────────────────────────────────────────────────
+
+    def _finish(self):
+        self._end_drive("End of game")
+        res = self.res
+        for side in (self.home, self.away):
+            # Games played / started
+            played = set(res.starters)
+            for p in side.team.roster:
+                if p.id in res.player_stats:          # took a snap or recorded a stat
+                    played.add(p.id)
+            for p in side.team.roster:
+                if p.id in played:
+                    self.st(p, "gp")
+                    if p.id in res.starters:
+                        self.st(p, "gs")
+            ts = res.team_stats[side.abbr]
+            ts["points"] = side.score
+            ts["total_yds"] = ts["pass_yds"] - ts["sack_yds"] + ts["rush_yds"]
+            # Red zone TDs
+            ts["rz_td"] = sum(1 for d in res.drives[side.abbr]
+                              if d.get("rz") and d["result"] == "Touchdown")
+        res.home_score = self.home.score
+        res.away_score = self.away.score
+
+
+def simulate_game(home, away, week=0, season=0, playoff=None, neutral=False,
+                  keep_pbp=True, rules=None, diagrams=False):
+    return GameSim(home, away, week, season, playoff, neutral, keep_pbp, rules, diagrams).play()
