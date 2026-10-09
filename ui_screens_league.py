@@ -1354,6 +1354,12 @@ class GlossaryScreen(Screen):
         self.sections.append(("Front offices, plans and owners", [(n, d, "") for n, d in front_office_desc()]))
         self.sections.append(("Advanced stats", [(n, d, "") for n, d in STATS_DESC]))
         self.sections.append(("Playbooks and calls", [(n, d, "") for n, d in PLAYBOOK_DESC]))
+        from glossary import COLUMN_DESC, SETTING_DESC
+        from settings import SPEC
+        self.sections.append(("Table columns (also shown when you hover over a column header)",
+                              [(n, d, "") for n, d in COLUMN_DESC.items()]))
+        self.sections.append(("Settings (also shown when you hover over a setting)",
+                              [(SPEC[k][2], d, "") for k, d in SETTING_DESC.items() if k in SPEC]))
 
     def refresh(self):
         q = self.search.text().strip().lower()

@@ -257,6 +257,7 @@ class DataTable(QTableWidget):
         # with clearContents() is quadratic in Qt 6 (a 1,500-row Players list took minutes).
         self.setRowCount(0)
         self.setRowCount(len(rows))
+        self._header_tips()
         bold = QFont()
         bold.setBold(True)
         for r, row in enumerate(rows):
@@ -295,6 +296,16 @@ class DataTable(QTableWidget):
         # Keep the scroll position when the same table is refilled
         bar = self.verticalScrollBar()
         bar.setValue(min(scroll, bar.maximum()))
+
+    def _header_tips(self):
+        """Glossary text on hover for every column header the glossary explains."""
+        from glossary import column_tip
+        for c in range(self.columnCount()):
+            it = self.horizontalHeaderItem(c)
+            if it is not None:
+                tip = column_tip(it.text())
+                if tip and it.toolTip() != tip:
+                    it.setToolTip(tip)
 
     def key_at(self, row):
         item = self.item(row, 0)

@@ -608,6 +608,13 @@ def columnCount(self):
 @impl("QtWidgets.QTableWidget")
 def setHorizontalHeaderLabels(self, labels):
     _tw(self)["headers"] = list(labels)
+    _tw(self)["header_items"] = [C("QtWidgets.QTableWidgetItem")(str(t)) for t in labels]
+
+
+@impl("QtWidgets.QTableWidget")
+def horizontalHeaderItem(self, c):
+    items = _tw(self).get("header_items", [])
+    return items[c] if 0 <= c < len(items) else None
 
 
 @impl("QtWidgets.QTableWidget")

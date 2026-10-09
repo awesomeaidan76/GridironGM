@@ -336,6 +336,7 @@ def main():
     step("front office views")
     sdlg = ui_dialogs.SettingsDialog(win)
     on_exec(sdlg)
+    assert "kicker" in sdlg.tips["fg_accuracy"], sdlg.tips["fg_accuracy"]
     step("settings dialog")
 
     # Free agent signing during preseason
@@ -379,6 +380,10 @@ def main():
         st._set_group(g)
         if g in ("AdvPass", "AdvRush", "AdvRec", "PassRush", "TeamAdv", "Grades", "Blocking", "QBDecisions"):
             assert st.table.rowCount() > 0, g
+    st._set_group("Passing")
+    tips = {st.table.horizontalHeaderItem(c).text(): st.table.horizontalHeaderItem(c).toolTip()
+            for c in range(st.table.columnCount())}
+    assert "Passer rating" in tips.get("Rate", ""), tips
     st.qualified.setChecked(False)
     st.team.setCurrentIndex(2)
     st.pos.setCurrentIndex(1)
@@ -533,6 +538,10 @@ def main():
     # Sim rest of the regular season and playoffs
     win.sim("regular")
     step("sim regular")
+    sdlg = ui_dialogs.SettingsDialog(win)
+    assert sdlg.readings_when == "this season" and "field goals made" in sdlg.tips["fg_accuracy"], \
+        sdlg.tips["fg_accuracy"]
+    step("settings readings")
     visit_all("end regular")
     win.sim("playoffs")
     step("sim playoffs")

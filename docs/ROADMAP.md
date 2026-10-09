@@ -36,8 +36,10 @@ Franchise, NBA 2K MyLeague/MyGM, Draft Day Sports, Pro Strategy Football and Mot
   cap space and deals ending for the next five seasons, every contract year by year with what a cut
   would save, and "what if I extend him?" previews priced from his agent's ask (OOTP, FOF8).
   Logic in `capplan.py`.
-- 🔜 **Glossary hover tooltips.** Show glossary text when hovering over column headers and
-  settings sliders, with the league average next to each slider (BBGM reviews).
+- ✅ **Glossary hover tooltips.** Every column header the glossary knows explains itself on hover
+  (stats, ratings and attribute abbreviations), every setting explains itself, and each match-engine
+  slider shows what it currently produces in this league next to the NFL figure (BBGM reviews).
+  The Glossary screen lists the columns and settings too.
 
 ## Later (mostly the Unity port)
 - 💡 Delegation per task: let staff handle the depth chart, re-signings, the practice squad or the
