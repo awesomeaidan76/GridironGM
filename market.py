@@ -482,3 +482,163 @@ def accept_offer(lg, offer):
 def decline_offer(lg, offer):
     if offer in getattr(lg, "trade_offers", []):
         lg.trade_offers.remove(offer)
+
+
+# ── Trading block and "what would make this work?" ───────────────────────────
+
+BLOCK_KINDS = ("any", "players", "picks")
+
+
+def _ai_budget(lg, team, incoming):
+    """Most value this club would hand over for `incoming` and still say yes (see trades.evaluate)."""
+    will = max(0.05, settings["ai_trade_willingness"])
+    val_in = _value(lg, incoming, team)
+    return max(0.0, (val_in - 1.0) / ((1.10 / will) * fo.demand(team)))
+
+
+def _give_value(lg, team, assets):
+    """How the club itself weighs what it gives up (as trades.evaluate does)."""
+    return sum(trade_value(a, lg, team) * 0.5 + trade_value(a, lg, None) * 0.5 for a in assets)
+
+
+def _block_package(lg, team, budget, kind):
+    """The best package this club can build within its budget, or None."""
+    user = lg.user_team
+    picks = [("pick", y, r, o) for y, r, o in rr.tradable_picks(lg, team.abbr)]
+    players = [p for p in _sellable(team, 55) if p.contract]
+    needs = user.needs()
+    best, best_v = None, 0.0
+    cands = []
+    if kind in ("any", "players"):
+        # Players the user could use, best fit first
+        players.sort(key=lambda p: -(needs.get(p.position, 0) * 20 + p.ovr))
+        for p in players[:12]:
+            cands.append([p])
+    if kind in ("any", "picks"):
+        picks.sort(key=lambda k: -rr.pick_value(lg, k[1], k[2], k[3]))
+        for i, k in enumerate(picks):
+            cands.append([k])
+            for k2 in picks[i + 1:i + 4]:
+                cands.append([k, k2])
+    if kind == "any":
+        top_picks = picks[:4]
+        for p in players[:6]:
+            for k in top_picks:
+                cands.append([p, k])
+    for pkg in cands:
+        cost = _give_value(lg, team, pkg)
+        if cost > budget or cost <= 0:
+            continue
+        v = _value(lg, pkg, user)
+        if v > best_v:
+            best, best_v = pkg, v
+    return best
+
+
+def block_offers(lg, kind="any"):
+    """Ask every club what it would give for the user's trading block.
+
+    Returns offers shaped like lg.trade_offers entries (from, give, get, made, expires), best
+    for the user first, plus 'value' (to the user) and 'fit' (why the club wants it)."""
+    from trades import evaluate
+    user = lg.user_team
+    block = block_assets(lg)
+    if user is None or not block:
+        return []
+    out = []
+    for team in _ai_teams(lg):
+        budget = _ai_budget(lg, team, block)
+        floor = _value(lg, block, None) * 0.30
+        if budget <= floor:
+            continue
+        pkg = _block_package(lg, team, budget, kind)
+        if not pkg or _give_value(lg, team, pkg) < floor:
+            continue
+        ok, _, _, _ = evaluate(lg, user, team, block, pkg)
+        if not ok:
+            continue
+        out.append({"from": team.abbr, "give": [_ref(a) for a in pkg], "get": [_ref(a) for a in block],
+                    "made": lg.week_label, "expires": _clock(lg), "value": _value(lg, pkg, user),
+                    "fit": fo.plan_of(team) if fo.gm_of(team) is not None else _mode(lg, team)})
+    out.sort(key=lambda o: -o["value"])
+    return out
+
+
+def block_assets(lg):
+    """The user's trading block as live assets; drops anything no longer the user's to trade."""
+    user = lg.user_team
+    keep, assets = [], []
+    for ref in getattr(lg, "trade_block", []) or []:
+        a = resolve_ref(lg, ref)
+        if a is None:
+            continue
+        if is_pick(a):
+            if rr.pick_owner(lg, a[1], a[2], a[3]) != user.abbr:
+                continue
+        elif a.team != user.abbr:
+            continue
+        keep.append(ref)
+        assets.append(a)
+    lg.trade_block = keep
+    return assets
+
+
+def toggle_block(lg, asset):
+    """Put an asset on the block, or take it off. Returns True if it is now on the block."""
+    ref = _ref(asset)
+    block = list(getattr(lg, "trade_block", []) or [])
+    if ref in block:
+        block.remove(ref)
+        lg.trade_block = block
+        return False
+    block.append(ref)
+    lg.trade_block = block
+    return True
+
+
+def accept_block_offer(lg, offer):
+    """Take one of the block offers: the club re-checks the deal before it goes through."""
+    from trades import evaluate
+    team = lg.teams[offer["from"]]
+    give, get = offer_assets(lg, offer)
+    if any(a is None for a in give + get):
+        return False, "That offer is no longer valid."
+    ok, msg, _, _ = evaluate(lg, lg.user_team, team, get, give)
+    if not ok:
+        return False, msg
+    execute(lg, lg.user_team, team, get, give)
+    lg.trade_block = [r for r in lg.trade_block if r not in offer["get"]]
+    return True, "Trade completed."
+
+
+def make_it_work(lg, team, give, get):
+    """Smallest addition from the user's side that gets `team` to say yes.
+
+    Returns (assets to add, message). An empty list with ok=False message means nothing fits."""
+    from trades import evaluate
+    user = lg.user_team
+    ok, msg, _, _ = evaluate(lg, user, team, give, get)
+    if ok:
+        return [], "They already accept this deal."
+    hard = ("deadline", "playoffs", "no longer own", "Add players")
+    if any(h in msg for h in hard):
+        return [], msg
+    picks = [("pick", y, r, o) for y, r, o in rr.tradable_picks(lg, user.abbr)]
+    picks = [k for k in picks if k not in give]
+    players = [p for p in _sellable(user) if p not in give and p.contract]
+    cands = [[k] for k in picks] + [[p] for p in players]
+    for i, k in enumerate(picks):
+        for k2 in picks[i + 1:]:
+            cands.append([k, k2])
+    best, best_cost = None, None
+    for extra in cands:
+        ok, _, _, _ = evaluate(lg, user, team, give + extra, get)
+        if not ok:
+            continue
+        cost = _value(lg, extra, user)
+        if best is None or cost < best_cost:
+            best, best_cost = extra, cost
+    if best is None:
+        return [], (f"Nothing you could add gets {team.full_name} there. Ask for less, or "
+                    f"check the cap and roster limits.")
+    return best, (f"Adding {', '.join(asset_label(lg, a) for a in best)} should get it done.")
