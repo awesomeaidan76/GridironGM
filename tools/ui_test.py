@@ -434,6 +434,43 @@ def main():
     tr.offers.setCurrentRow(0)
     tr._decline_offer()
     step("trade offers")
+
+    # Trading block: put a starter on the block, ask every club, haggle, accept
+    win.goto("block")
+    blk = win.screens["block"]
+    star = max((p for p in team.roster if not p.ps and not p.ir and not p.is_injured
+                and p.position not in ("QB", "K", "P")), key=lambda p: p.ovr)
+    assert select_key(blk.mine, star.id)
+    blk._add()
+    assert star.id in lg.trade_block, lg.trade_block
+    pk = next(blk.mine.key_at(r) for r in range(blk.mine.rowCount()) if isinstance(blk.mine.key_at(r), str))
+    assert select_key(blk.mine, pk)
+    blk._add()
+    blk.block.setCurrentRow(1)
+    blk._remove()
+    assert len(lg.trade_block) == 1, lg.trade_block
+    for kind in ("players", "picks", "any"):
+        blk._set_kind(kind)
+        blk._ask()
+        assert blk.offers_table.rowCount() > 0, kind
+    blk.offers_table.selectRow(0)
+    blk._open_in_trades()
+    assert tr.give.count() == 1 and tr.get.count() >= 1
+    tr._make_it_work()
+    win.goto("block")
+    blk._ask()
+    blk.offers_table.selectRow(0)
+    blk._accept()
+    assert star.team != team.abbr, "block trade failed"
+    assert not lg.trade_block
+    step("trading block")
+    win.goto("trades")
+    rich = max(lg.team_list()[12].roster, key=lambda p: p.ovr)
+    tr.preload(rich)
+    tr._make_it_work()
+    if tr.give.count():
+        assert tr._evaluate(), "make it work suggestion was not accepted"
+    step(f"make it work ({tr.give.count()} added)")
     for _ in range(40):
         if market.maybe_offer_user(lg, chance=1.0):
             break
