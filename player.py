@@ -323,6 +323,10 @@ class Player:
     fa_origin = None        # (team, year) when he left a team in free agency
     familiarity = None      # {slot: 0-100} learned at other positions (position_fit.py)
     fam_used = None         # {slot: season} last season he got reps there
+    converted_from = None   # while converting to a new position: the one his frame was built for
+    base_weight = None      # his weight when that conversion started (conditioning limit)
+    position_history = None # [(season, old, new)] permanent position changes
+    train_pos = None        # a second position he practises during the week
 
     def __init__(self, name, position, age):
         self.id = next_player_id()
@@ -379,10 +383,14 @@ class Player:
         return state
 
     def recalc(self):
-        self._ca = compute_ca(self.attrs, self.position)
+        self.__dict__.pop("_fit_cache", None)
+        if self.converted_from:
+            # still learning his new position: size and familiarity count there
+            self._ca = position_fit.converted_ca(self)
+        else:
+            self._ca = compute_ca(self.attrs, self.position)
         if self._ca > self.pa:
             self.pa = self._ca
-        self.__dict__.pop("_fit_cache", None)
         return self._ca
 
     @property
@@ -402,10 +410,19 @@ class Player:
 
     @property
     def pot(self):
-        """Projected peak rating. Past his prime a player's ceiling is what he is now."""
+        """
+        Projected peak rating. Past his prime a player's ceiling is what he is
+        now, unless he is still learning a new position.
+        """
         if self.years_to_peak() <= 0:
+            if self.converted_from:
+                return ovr_from_ca(self._settled_ca(), self.position)
             return self.ovr
         return ovr_from_ca(max(self.pa, self._ca), self.position)
+
+    def _settled_ca(self):
+        """What a converting veteran rates once he has learned his new position."""
+        return max(self._ca, position_fit.learned_ca(self, self.position, conditioned=True))
 
     def ovr_at(self, position):
         return ovr_from_ca(self.rating_at(position), position)
@@ -454,7 +471,7 @@ class Player:
 
     def scouted_pot_range(self, scouting=10):
         if self.age > self.curve()[1] or self.years_to_peak() <= 0:
-            return (self.ovr, self.ovr)
+            return (self.pot, self.pot)
         lo, hi = self.scouted_pa_range(scouting)
         return (ovr_from_ca(lo, self.position), ovr_from_ca(hi, self.position))
 
@@ -554,6 +571,9 @@ class Player:
         narrows it further and centres it closer to the truth.
         """
         years = self.years_to_peak()
+        if years <= 0 and self.converted_from:
+            c = self._settled_ca()
+            return (c, c)
         if years <= 0 or self.pa - self._ca <= 1:
             return (self._ca, self._ca)
         prof = self.dev_profile()

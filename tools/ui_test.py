@@ -92,6 +92,7 @@ def select_key(table, key):
 
 
 NEGOTIATIONS = []
+MOVE = {"slot": None}          # the position a PositionChangeDialog should move its player to
 from ui_screens_club import DEPTH_SLOTS  # noqa: E402
 import position_fit as fit  # noqa: E402
 DEPTH_SLOT_DT = DEPTH_SLOTS.index("DT")
@@ -112,6 +113,15 @@ def on_exec(dlg):
         return dlg.result()
     if name == "PlayerDialog":
         # Toggle 'show every attribute' and visit tabs by rebuilding
+        return 0
+    if name == "PositionChangeDialog":
+        for i in range(dlg.combo.count()):
+            dlg.combo.setCurrentIndex(i)           # every position's preview
+        assert "morale" in dlg.detail.text(), dlg.detail.text()
+        if MOVE["slot"]:
+            dlg.combo.setCurrentIndex(dlg.combo.findData(MOVE["slot"]))
+            dlg._apply()
+            return dlg.result()
         return 0
     if name == "LiveGameDialog":
         LIVE.append(dlg)
@@ -308,6 +318,43 @@ def main():
     user.depth_overrides["RB"] = ids
     OOP_PLAYER = (wr, fit.familiarity(wr, "RB"))
     step("depth chart: anyone at any slot")
+    # Permanent position change: a corner to safety from the right-click menu, then his profile
+    cb = max((p for p in user.roster if p.position == "CB" and not p.ps), key=lambda p: p.ca)
+    dc.slots.setCurrentRow(DEPTH_SLOTS.index("S"))
+    dc.everyone.setChecked(True)
+
+    def menu_for(p):
+        row = next(r for r in range(dc.order.rowCount()) if dc.order.key_at(r) == p.id)
+        return dict(a for a in dc.order.context_actions(row) if a[0])
+    acts = menu_for(cb)
+    assert "Open profile" in acts and "Train S as his second position" in acts, list(acts)
+    acts["Train S as his second position"]()
+    assert cb.train_pos == "S"
+    acts = menu_for(cb)
+    assert "Stop training S" in acts, list(acts)
+    MOVE["slot"] = "S"
+    acts["Move to S permanently…"]()
+    MOVE["slot"] = None
+    assert cb.position == "S" and cb.converted_from == "CB" and cb.train_pos is None, cb
+    assert cb.position_history and cb.position_history[-1][1:] == ("CB", "S")
+    assert fit.familiarity(cb, "S") < 100 and fit.familiarity(cb, "CB") == 100
+    assert any(n[2] == "Position Change" and cb.name in n[3] for n in lg.news[-3:]), lg.news[-3:]
+    assert cb.id not in user.depth_overrides.get("CB", [])
+    assert cb in user.full_depth("S")
+    assert "Converted from CB" in fit.conversion_status(cb)
+    dc.order.selectRow(next(r for r in range(dc.order.rowCount()) if dc.order.key_at(r) == cb.id))
+    dc._show_fit()
+    assert "converted from CB" in dc.fit_note.text(), dc.fit_note.text()
+    pdlg = ui_dialogs.PlayerDialog(win, cb)
+    pdlg.train_combo.setCurrentIndex(pdlg.train_combo.findData("LB"))
+    assert cb.train_pos == "LB"
+    pdlg.train_combo.setCurrentIndex(0)
+    assert cb.train_pos is None
+    pdlg._change_position("CB")                  # the dialog opens; nothing is moved
+    assert cb.position == "S"
+    dc.everyone.setChecked(False)
+    CONVERTED = (cb, fit.familiarity(cb, "S"))
+    step(f"position change: CB to S ({cb.ovr} OVR, pot {cb.pot})")
     tac = win.screens["tactics"]
     for key, (s, _) in tac.sliders.items():
         s.setValue(80)
@@ -398,6 +445,10 @@ def main():
         win.continue_clicked()
         step(f"continue {lg.week_label}")
     visit_all("week3")
+    cb, cfam0 = CONVERTED
+    if cb.team == lg.user_abbr and cb.converted_from:
+        assert fit.familiarity(cb, "S") > cfam0, (cfam0, fit.familiarity(cb, "S"))
+        step(f"learning S after the move: {cfam0:.0f} -> {fit.familiarity(cb, 'S'):.0f}")
     wr, fam0 = OOP_PLAYER
     if wr.team == lg.user_abbr and lg.week >= 1:
         assert fit.familiarity(wr, "RB") > fam0, (fam0, fit.familiarity(wr, "RB"))
@@ -658,6 +709,9 @@ def main():
     win.continue_clicked()
     assert lg.phase == "regular" and lg.week == 0, (lg.phase, lg.week)
     step("new season")
+    moves = [n for n in lg.news if n[2] == "Position Change" and n[4] != lg.user_abbr]
+    assert moves, "no CPU position changes in the offseason"
+    step(f"CPU position changes: {len(moves)}")
 
     # Getting fired and taking a new job
     import staff as staff_mod
@@ -686,8 +740,10 @@ def main():
     hdr.sortIndicatorChanged.emit(3, Qt.SortOrder.DescendingOrder)     # what a header click does
     win.goto("news")
     lay = win.screens["news"].outer
-    next(lay.itemAt(i).widget() for i in range(lay.count())
-         if hasattr(lay.itemAt(i).widget(), "pick")).pick("Trade")
+    chips = next(lay.itemAt(i).widget() for i in range(lay.count()) if hasattr(lay.itemAt(i).widget(), "pick"))
+    chips.pick("Positions")
+    assert win.screens["news"].cat == "Positions"
+    chips.pick("Trade")
     assert win.screens["news"].cat == "Trade"
     path = save_manager.save(lg, "ui test")
     lg2 = save_manager.load(path)

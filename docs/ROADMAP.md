@@ -49,9 +49,10 @@ The owner set the order of this work in October 2026.
   Slot POT, a fit breakdown, an "Everyone" toggle, drag and drop, locks, "keep sorted" and a
   position matrix. The engine plays the slot ratings, and unfamiliar players blow assignments and
   draw more flags. CPU clubs start an out-of-position player when he is far better (news explains it).
-- 🔜 **Permanent position changes** from the profile and by right-click in the depth chart, CPU
-  conversions with news, a second-position training focus with a staff report, coach trust in
-  conversions, a mild morale effect that depends on personality, CPU two-way use of multi-role stars.
+- ✅ **Permanent position changes** from the profile and by right-click in the depth chart (he keeps
+  learning the new position, with conditioning toward its build), CPU conversions with news, a
+  second-position training focus, a Staff Position Report, coach trust in conversions, a mild morale
+  effect that depends on personality, CPU two-way use of multi-role stars.
 - 🔜 **Package slots** with their own depth lists (third-down back, power back, slot receiver,
   nickel corner, sub linebacker, pass-rush ends and tackles), then **game-day inactives** (48 of 53).
 - 💡 The rest of the depth chart GUI ideas: a game-day preview of who takes the field in each

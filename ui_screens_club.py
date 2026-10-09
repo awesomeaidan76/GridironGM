@@ -6,9 +6,9 @@ from collections import Counter
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QKeySequence, QShortcut
-from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QGridLayout, QHBoxLayout, QLabel, QListWidget,
-                             QListWidgetItem, QPushButton, QScrollArea, QSlider, QSpinBox, QTabWidget,
-                             QTextBrowser, QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QGridLayout, QHBoxLayout, QLabel,
+                             QListWidget, QListWidgetItem, QPushButton, QScrollArea, QSlider, QSpinBox,
+                             QTabWidget, QTextBrowser, QVBoxLayout, QWidget)
 
 import capplan
 import free_agency as fa
@@ -705,6 +705,9 @@ class DepthChartScreen(Screen):
                                 "Snap %", "Status"], stretch=2)
         self.order.on_drop = self._drop
         self.order.on_activate = self.main.open_player
+        self.order.on_context = self._context_actions
+        self.order.setToolTip("Right-click a player to move him to this position for good, train it as his "
+                              "second position, or open his profile.")
         self.order.itemSelectionChanged.connect(self._show_fit)
         mid.addWidget(self.order, 1)
         self.fit_note = QLabel("")
@@ -810,7 +813,7 @@ class DepthChartScreen(Screen):
         return p.return_rating if slot in RETURN_SLOTS else p.ovr_at(slot)
 
     def _fit_cell(self, p, slot):
-        if slot in RETURN_SLOTS or p.position == slot:
+        if fit.natural(p, slot):
             return cell("Natural" if p.position == slot else "", 100)
         fam = fit.familiarity(p, slot)
         label = fit.familiarity_label(fam)
@@ -859,6 +862,9 @@ class DepthChartScreen(Screen):
             else:
                 status, col = ("Starter" if starter else ""), None
             own = p.position == slot or slot in RETURN_SLOTS
+            pos_tip = None if own else f"{p.ovr} at his own position ({p.position})"
+            if p.converted_from:
+                pos_tip = fit.conversion_status(p) + ("" if own else f"; {p.ovr} at {p.position}")
             if slot in RETURN_SLOTS:
                 pot = cell("", 0)
             else:
@@ -867,8 +873,8 @@ class DepthChartScreen(Screen):
             rows.append([cell(i + 1 if on_list else "—", i),
                          cell("🔒" if p.id in locks else "", 1 if p.id in locks else 0),
                          cell(p.name, bold=starter, color=accent() if starter else None),
-                         cell(p.position, color=None if own else T("warn"),
-                              tip=None if own else f"{p.ovr} at his own position ({p.position})"),
+                         cell(p.position + ("*" if p.converted_from else ""),
+                              color=None if own else T("warn"), tip=pos_tip),
                          p.age, ovr_cell(self._rating(p, slot)), pot, self._fit_cell(p, slot),
                          cell(p.attrs.get("stamina", 0), p.attrs.get("stamina", 0)),
                          cell(f"{share:.0f}%" if p.season_stats[unit] else "—", share),
@@ -887,11 +893,12 @@ class DepthChartScreen(Screen):
         if p is None or slot in RETURN_SLOTS:
             self.fit_note.setText("")
             return
-        if p.position == slot:
+        if fit.natural(p, slot):
             self.fit_note.setText(f"<b>{p.name}</b> is a natural {slot}: {p.ovr} OVR.")
             return
         b = fit.breakdown(p, slot)
-        parts = [f"<b>{p.name}</b> ({p.position} {p.ovr}) at {slot}: the {slot} formula on his "
+        who = f"converted from {p.converted_from}" if p.position == slot else f"{p.position} {p.ovr}"
+        parts = [f"<b>{p.name}</b> ({who}) at {slot}: the {slot} formula on his "
                  f"attributes gives {b['formula']}"]
         if b["size"]:
             parts.append(f"{b['size']}: {b['after_size'] - b['formula']:+d}")
@@ -901,6 +908,8 @@ class DepthChartScreen(Screen):
         if b["familiarity"] < 90:
             tail += (f", about {b['after_size']} once he knows the position "
                      f"(roughly {b['weeks_to_learn']} weeks of practice and game reps)")
+        if p.train_pos == slot:
+            tail += f". He is training {slot} as his second position"
         self.fit_note.setText("; ".join(parts) + tail + ".")
 
     ROT_GROUPS = {"DT": "DL", "EDGE": "DL", "LB": "LB", "CB": "DB", "S": "DB", "WR": "WR", "TE": "TE",
@@ -958,9 +967,9 @@ class DepthChartScreen(Screen):
             ids[i], ids[j] = ids[j], ids[i]
             self._set_order(ids, pid)
 
-    def _to_top(self):
+    def _to_top(self, pid=None):
         ids = list(self._listed_ids)
-        pid = self.order.selected_key()
+        pid = self.order.selected_key() if pid is None else pid
         if pid is None:
             return
         if pid in ids:
@@ -1012,10 +1021,10 @@ class DepthChartScreen(Screen):
         self._show_slot()
         self.order.selectRow(i)
 
-    def _toggle_lock(self):
+    def _toggle_lock(self, pid=None):
         slot = self._slot()
         team = self.user
-        pid = self.order.selected_key()
+        pid = self.order.selected_key() if pid is None else pid
         if pid is None or pid not in self._listed_ids or slot in RETURN_SLOTS:
             return
         team.depth_overrides[slot] = list(self._listed_ids)     # the lock holds his current place
@@ -1029,6 +1038,38 @@ class DepthChartScreen(Screen):
         team.depth_locks = locks
         self._show_slot()
         self.order.selectRow(self._listed_ids.index(pid))
+
+    def _context_actions(self, pid):
+        """Right-click menu for a player on the slot's list: [(label, fn)], None for a separator."""
+        p = self.user.get_player(pid)
+        if p is None:
+            return []
+        slot = self._slot()
+        acts = [("Open profile", lambda: self.main.open_player(pid))]
+        if pid in self._listed_ids:
+            acts.append((f"Make starter at {slot}", lambda: self._to_top(pid)))
+            if slot not in RETURN_SLOTS:
+                locked = pid in (self.user.depth_locks or {}).get(slot, [])
+                acts.append(("Unlock" if locked else "Lock in place", lambda: self._toggle_lock(pid)))
+        if slot not in RETURN_SLOTS and slot != p.position:
+            acts.append((None, None))
+            back = " (back to his old position)" if slot == p.converted_from else ""
+            acts.append((f"Move to {slot} permanently{back}…", lambda: self._change_position(p, slot)))
+            if p.train_pos == slot:
+                acts.append((f"Stop training {slot}", lambda: self._set_train(p, None)))
+            else:
+                acts.append((f"Train {slot} as his second position", lambda: self._set_train(p, slot)))
+        return acts
+
+    def _change_position(self, p, slot):
+        from ui_dialogs import PositionChangeDialog
+        dlg = PositionChangeDialog(self.main, p, slot)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.main.refresh_all()
+
+    def _set_train(self, p, slot):
+        p.train_pos = slot
+        self._show_slot()
 
     def _auto(self):
         slot = self._slot()
@@ -1062,7 +1103,7 @@ class DepthChartScreen(Screen):
                 v = p.ovr_at(slot)
                 c = ovr_cell(v)
                 if slot == p.position:
-                    c["tip"] = "His own position"
+                    c["tip"] = fit.conversion_status(p) or "His own position"
                 else:
                     c["bold"] = False
                     c["tip"] = f"{fit.familiarity_label(fit.familiarity(p, slot))} at {slot}"
@@ -1114,7 +1155,7 @@ class DepthChartScreen(Screen):
                             "and fatigue counts every snap he plays")
         for pos, players in s.items():
             for p in players:
-                if p.position == pos:
+                if fit.natural(p, pos):
                     continue
                 fam = fit.familiarity(p, pos)
                 if fam < 70:

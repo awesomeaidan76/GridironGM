@@ -68,6 +68,7 @@ class Team:
     depth_auto = False       # keep every depth chart slot auto sorted (locked players stay where they are)
     depth_locks = None       # {slot: [player ids]} players auto sort never moves
     cpu_oop = None           # {slot: [player ids]} players a CPU staff has chosen to start out of position
+    cpu_role = None          # {slot: [player id, place]} a CPU star's part-time second role (two-way players)
 
     def __init__(self, abbr, city, name, conference, division, colors):
         self.abbr = abbr
@@ -130,6 +131,9 @@ class Team:
             for ids in groups.values():
                 if player.id in ids:
                     ids.remove(player.id)
+        if self.cpu_role:
+            for slot in [s for s, v in self.cpu_role.items() if v[0] == player.id]:
+                del self.cpu_role[slot]
         player.team = None
 
     @property
@@ -190,12 +194,19 @@ class Team:
             ids += [pid for pid in self.cpu_oop.get(slot, []) if pid not in ids]
         return ids
 
+    def _role(self, slot):
+        """(player id, place) of a CPU two-way player's role at this slot, or None."""
+        if self.tactics is None and self.cpu_role:
+            return self.cpu_role.get(slot)
+        return None
+
     def slot_pool(self, slot):
         """Everyone who belongs on a slot's list (practice squad aside)."""
         byid = {p.id: p for p in self.roster}
         pool = [p for p in self.roster if p.position == slot and not p.ps]
         seen = {p.id for p in pool}
-        for pid in self._listed(slot):
+        role = self._role(slot)
+        for pid in self._listed(slot) + ([role[0]] if role else []):
             p = byid.get(pid)
             if p is not None and not p.ps and pid not in seen:
                 pool.append(p)
@@ -235,7 +246,14 @@ class Team:
             auto = sorted(pool, key=lambda p: -self.depth_score(p, slot))
             return self._locked_order(slot, auto)
         rank = {pid: i for i, pid in enumerate(self._listed(slot))}
-        return sorted(pool, key=lambda p: (rank.get(p.id, 999), -self.depth_score(p, slot)))
+        out = sorted(pool, key=lambda p: (rank.get(p.id, 999), -self.depth_score(p, slot)))
+        role = self._role(slot)
+        if role:
+            p = next((q for q in out if q.id == role[0]), None)
+            if p is not None:
+                out.remove(p)
+                out.insert(min(role[1], len(out)), p)
+        return out
 
     def depth(self, pos, include_injured=False):
         """Players at a slot in depth order (the user's order first)."""

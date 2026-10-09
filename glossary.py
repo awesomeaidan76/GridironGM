@@ -97,8 +97,9 @@ RATING_DESC = [
      "is that position's formula applied to his own attributes, so a receiver at running back is judged on vision, "
      "balance and breaking tackles, which receivers rarely have. Then his size and how well he knows the "
      "position count. His rating at his own position never changes, and his contract is valued at his own "
-     "position."),
-    ("Familiarity", "How well he knows a position, 0-100: always 100 (Natural) at his own. Elsewhere he starts "
+     "position, until he is moved to the new one for good."),
+    ("Familiarity", "How well he knows a position, 0-100: always 100 (Natural) at the position he came up "
+     "playing. Elsewhere he starts "
      "with what carries over (a tackle already knows a lot about guard, a receiver very little about corner) "
      "and learns from practice reps when he is on that slot's depth chart (starters get the most) and from "
      "game snaps there: about four weeks for a related move, a season or more for an unrelated one. "
@@ -112,6 +113,28 @@ RATING_DESC = [
      "little. Inside the normal range there is no effect."),
     ("Slot POT", "What he could become at a slot once he has learned it: his rating there with full "
      "familiarity, plus the growth he still has in him, in proportion to how much the two positions share."),
+    ("Position change", "Moving a player to a new position for good (Change Position on his profile, or "
+     "right-click him on the Depth Chart). The new position becomes his listed one: his OVR, his contract value "
+     "and his development follow it, and his potential is reset to what the staff expect him to reach there. "
+     "He is not a natural yet: until he has learned it his OVR there carries the familiarity penalty (and the "
+     "size penalty if he is the wrong build). His old position stays familiar, and moving him back makes him a "
+     "natural there again."),
+    ("Converting", "A player learning the position he was moved to (marked * in the depth chart). He gets "
+     "practice reps there every week even as a backup, and training camp counts too. Good position coaches "
+     "teach it faster. Each offseason a conditioning program moves his weight toward the position's normal "
+     "build, by up to about 25 lb in all (faster for young players): bulking up costs a little speed and "
+     "quickness, slimming down a little strength. He becomes a natural once he knows the position and is close "
+     "to its build; a receiver who can never get big enough for tight end keeps a small size penalty."),
+    ("Second position", "A training focus on his profile (Positions tab): he takes extra practice reps at a "
+     "second position, so he learns it without being on its depth chart, and part of his offseason growth "
+     "goes into its skills. It costs him a little development at his own position. Moving him there for good "
+     "ends it."),
+    ("Staff Position Report", "Your position coaches' view of where else a player could play: his rating there "
+     "today, once he has learned it (and been conditioned for it), his potential there, how well he knows it "
+     "and how many weeks it would take. Like every report it is their opinion: the better the position coach, "
+     "the closer it is to the truth. Natural fit and Worth the work mean he should be about as good there as "
+     "where he is; Could make the switch and Long project a few points worse; Emergency option and Not suited "
+     "well below."),
     ("Tiers", "Elite 90+, Pro Bowl 82-89, Starter 72-81, Rotation 64-71, Backup 55-63, Fringe below 55."),
     ("Attributes (1-100)", "90+ world class, 75-89 quality, 60-74 solid starter level, 45-59 backup, below 45 poor."),
     ("Development", "Each offseason a player grows, holds or declines depending on age, potential, work ethic, "
@@ -172,6 +195,22 @@ GAMEDAY_DESC = [
      "positions on game day. Each week they also look for a player who would be overwhelmingly better "
      "somewhere else than the man starting there, and start him there (shown in the news). Stars get the "
      "benefit of the doubt, and adaptable head coaches try it sooner."),
+    ("Two-way players", "A CPU club with a Pro Bowl level star (or a big name) who would also be a good starter "
+     "at a quite different position, and much better there than the backup, lists him as that slot's first "
+     "backup too: a receiver who takes handoffs, a linebacker at tight end, a corner at receiver. He plays one "
+     "spot per snap and fatigue counts every snap. Moves between close positions (corner and safety, edge and "
+     "linebacker) are left to game-day injury cover. Adaptable coaches try it sooner."),
+    ("CPU position changes", "Each offseason a CPU staff may move up to two players for good: a safety to "
+     "corner, a tackle inside to guard, a big receiver to tight end, a buried backup to where he projects "
+     "better. They judge him on what he should be there once he has learned it against what they lose where "
+     "he was, and won't move a player they would only start back at his old spot, or one they moved in the "
+     "last two seasons. Adaptable, teaching coaches and risk-taking GMs make more moves. Each move is in the "
+     "news with his reaction."),
+    ("Player reactions to a move", "How a player takes a position change depends on who he is: adaptable "
+     "players enjoy a new challenge, ambitious ones dislike a move to a position that is paid less, stars "
+     "don't like being moved off their spot, and anyone likes a move that makes him a starter. Calm players "
+     "take it in their stride. A player who spends real time away from his position each week also feels it "
+     "a little: adaptable players don't mind, ambitious stars do."),
     ("Game plan", "Before each game the defensive coordinator scouts the opponent and adjusts: more pressure "
      "against a shaky quarterback, a spy against a runner, a safety rolled toward a star receiver, a loaded "
      "box against a run-first team. Good coordinators read it right; poor ones over- or under-react. Set your "
@@ -316,8 +355,8 @@ COLUMN_DESC = {
     "Slot OVR": "His rating at this depth chart slot today: the position's formula on his attributes, adjusted for "
                 "his size and how well he knows the position. At his own position it is his OVR.",
     "Slot POT": "What he could become at this slot once he has learned it (a scouted range for young players).",
-    "Fit": "Natural at his own position. Elsewhere, how well he knows the position (familiarity 0-100) and "
-           "whether he is light or heavy for it.",
+    "Fit": "Natural at his own position. Elsewhere (and at a position he is converting to), how well he knows "
+           "the position (familiarity 0-100) and whether he is light or heavy for it.",
     "Lock": "Locked players keep their place when the depth chart is auto sorted.",
     "Busts": "Blown assignments: missed blocks, blown coverages and wrong routes by a player learning a position.",
     # Games and standings

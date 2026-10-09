@@ -34,6 +34,9 @@ def _weights_for_change(player, growing):
     w = {}
     pos_w = POSITION_WEIGHTS[player.position]
     focus = getattr(player, "training_focus", None)
+    second = getattr(player, "train_pos", None)
+    if second == player.position or second not in POSITION_WEIGHTS:
+        second = None
     for attr in player.attrs:
         base = pos_w.get(attr, 0.0)
         if growing:
@@ -64,6 +67,11 @@ def _weights_for_change(player, growing):
             if focus and ATTRIBUTES[attr][2] == focus:
                 mult *= 0.5
             w[attr] = (base + 0.4) * mult
+    if growing and second:
+        # practising a second position builds a little of what it asks for
+        for attr, k in POSITION_WEIGHTS[second].items():
+            if attr in player.attrs and attr not in pos_w and attr not in ATHLETIC_ATTRS:
+                w[attr] = w.get(attr, 0.0) + k * 0.35
     return w
 
 
@@ -71,6 +79,8 @@ def _apply_ca_change(player, target):
     """Move attributes one point at a time until CA reaches `target`."""
     pos = player.position
     current = compute_ca(player.attrs, pos)
+    # a player converting to a new position is rated below his raw formula until he learns it
+    target += current - player.ca
     growing = target > current
     weights = _weights_for_change(player, growing)
     keys = list(weights)
@@ -161,6 +171,7 @@ FACTOR_LABELS = {
     "injury": "Injuries", "morale": "Morale", "complacency": "Complacency",
     "scheme": "Scheme fit", "mentor": "Veteran mentor", "contract": "Contract year",
     "culture": "Team culture", "durability": "Durability", "luck": "Natural variation",
+    "second_position": "Second-position training",
 }
 
 
@@ -212,6 +223,9 @@ def yearly_change(player, team, gp=None, gs=None, last_season=None, detail=False
         m["scheme"] = 1.06 if fit > 0 else 0.95
     if _mentor(player, team) is not None:
         m["mentor"] = 1.06
+    tp = getattr(player, "train_pos", None)
+    if tp and tp != player.position:
+        m["second_position"] = 0.93            # practice time split with a second position
     if getattr(player, "contract_year", None) == last_season:
         m["contract"] = 1.0 + amb / 100.0 * 0.10
     if team is not None and team.history and team.history[-1]["year"] == last_season:

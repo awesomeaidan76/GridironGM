@@ -1285,7 +1285,7 @@ class NewsScreen(Screen):
         super().__init__(main)
         chips, get = filter_chips([("mine", "My Club"), ("all", "Everything"), ("Injury", "Injuries"),
                                    ("Signing", "Signings"), ("Trade", "Trades"), ("Draft", "Draft"),
-                                   ("Coaching", "Coaching"), ("Awards", "Awards"),
+                                   ("Coaching", "Coaching"), ("Positions", "Positions"), ("Awards", "Awards"),
                                    ("Performance", "Performances")], self._set_cat, "mine", state_key="news")
         self.cat = get()
         self.outer.addWidget(chips)
@@ -1306,7 +1306,9 @@ class NewsScreen(Screen):
         if self.cat == "mine":
             items = [n for n in items if n[4] == lg.user_abbr or n[2] in ("League", "Championship")]
         elif self.cat != "all":
-            items = [n for n in items if n[2] == self.cat or (self.cat == "Signing" and n[2] in ("Signing", "Release", "Contract"))]
+            items = [n for n in items if n[2] == self.cat
+                     or (self.cat == "Signing" and n[2] in ("Signing", "Release", "Contract"))
+                     or (self.cat == "Positions" and n[2] in ("Depth Chart", "Position Change"))]
         self.feed.setHtml(news_html(items[:250]))
         self.tx.set_rows([[y, w, t] for y, w, t in reversed(lg.transactions[-600:])])
         self.set_subtitle(f"{len(items)} stories")
