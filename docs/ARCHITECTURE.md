@@ -15,6 +15,7 @@ there, so porting is a matter of translating it, not inventing it.
 ├──────────────────────────────────────────────────────────────┤
 │ Game flow (no UI code at all)                                │
 │   season.py   — the Continue button: weeks, playoffs, phases │
+│   inbox.py    — decisions waiting on the user (to-do list)   │
 │   save_manager.py — save / load / JSON export                │
 ├──────────────────────────────────────────────────────────────┤
 │ League systems                                               │
