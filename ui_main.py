@@ -17,7 +17,8 @@ import season as season_mod
 from settings import settings
 from ui_dialogs import LoadDialog, PlayerDialog, SettingsDialog, TeamDialog
 from ui_live import LiveGameDialog, has_live_data
-from ui_screens_club import (DepthChartScreen, FinancesScreen, HomeScreen, RosterScreen,
+import inbox
+from ui_screens_club import (DepthChartScreen, FinancesScreen, HomeScreen, InboxScreen, RosterScreen,
                              StaffScreen, TacticsScreen, GamePlanScreen)
 from ui_screens_league import (GameCenterScreen, HistoryScreen, NewsScreen, PlayersScreen,
                                PlayoffsScreen, ScheduleScreen, StandingsScreen, StatsScreen,
@@ -27,7 +28,7 @@ from ui_theme import T, accent, stylesheet, palette
 from ui_widgets import DataTable, TeamBadge, confirm, info
 
 NAV = [
-    ("MY CLUB", [("home", "Home"), ("roster", "Roster"), ("depth", "Depth Chart"),
+    ("MY CLUB", [("home", "Home"), ("inbox", "Inbox"), ("roster", "Roster"), ("depth", "Depth Chart"),
                  ("tactics", "Tactics"), ("gameplan", "Game Plan"), ("staff", "Staff"),
                  ("finances", "Finances")]),
     ("LEAGUE", [("schedule", "Schedule"), ("game", "Game Center"), ("standings", "Standings"),
@@ -38,7 +39,7 @@ NAV = [
 ]
 
 SCREENS = {
-    "home": HomeScreen, "roster": RosterScreen, "depth": DepthChartScreen,
+    "home": HomeScreen, "inbox": InboxScreen, "roster": RosterScreen, "depth": DepthChartScreen,
     "tactics": TacticsScreen, "gameplan": GamePlanScreen, "staff": StaffScreen, "finances": FinancesScreen,
     "schedule": ScheduleScreen, "game": GameCenterScreen, "standings": StandingsScreen,
     "stats": StatsScreen, "players": PlayersScreen, "teams": TeamsScreen,
@@ -268,6 +269,8 @@ class MainWindow(QMainWindow):
                                  f"{lg.week_label} · Cap space "
                                  f"{t.cap_space(lg.salary_cap) / 1e6:.1f}M")
         self.cont_btn.setText(season_mod.continue_label(lg) + "  ▸")
+        n = inbox.urgent_count(lg)
+        self.nav_buttons["inbox"].setText(f"Inbox ({n})" if n else "Inbox")
         self.cont_btn.setEnabled(not self.busy)
         self.sim_btn.setEnabled(not self.busy)
         self.save_btn.setEnabled(not self.busy)

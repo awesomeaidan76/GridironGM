@@ -19,9 +19,11 @@ Franchise, NBA 2K MyLeague/MyGM, Draft Day Sports, Pro Strategy Football and Mot
   CPU rosters that don't make sense.
 
 ## Next (Python, small)
-- 🔜 **Actionable inbox / to-do.** Group "needs a decision" items (expiring deals, offers, illegal
-  depth chart, holdouts, roster over the limit) apart from news, with buttons to act on each item
-  inline (as in FM27's inbox redesign).
+- ✅ **Actionable inbox / to-do.** A new Inbox screen (with a count in the sidebar and a
+  "Needs a Decision" card on Home) groups trade offers, holdouts, expiring deals, extension
+  candidates, injured-reserve candidates, positions short of healthy starters, roster and cap
+  limits and draft picks apart from news, with buttons to act on each inline (as in FM27's inbox
+  redesign). Logic lives in `inbox.py`.
 - ✅ **Persistent table state.** Every table keeps its sort order between sessions and its scroll
   position when it refreshes; filter chips (Roster, Finances, Standings, Stats, News, Draft, Free
   Agency) are remembered too (`ui_state.json`). Back and forward buttons in the top bar, or

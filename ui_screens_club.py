@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (QComboBox, QGridLayout, QHBoxLayout, QLabel, QListW
                              QTextBrowser, QVBoxLayout, QWidget)
 
 import free_agency as fa
+import inbox
 import roster_rules as rr
 from coach import COACH_RATINGS, COACH_RATING_LABELS, OFFENSIVE_SCHEMES, DEFENSIVE_SCHEMES
 from contracts import market_value
@@ -110,6 +111,25 @@ class HomeScreen(Screen):
         banner.add(msg)
         self.lay.addWidget(banner)
 
+        items = inbox.action_items(lg)
+        pressing = [it for it in items if it["priority"] <= 2]
+        if pressing:
+            self.lay.addWidget(inbox_card(self.main, items, limit=min(4, len(pressing))))
+        elif items:
+            note = Card()
+            row = QHBoxLayout()
+            lbl = QLabel(f"Nothing needs a decision now. {len(items)} thing{'s' if len(items) > 1 else ''} "
+                         f"worth a look in your inbox, starting with: {items[0]['title']}.")
+            lbl.setObjectName("muted")
+            lbl.setWordWrap(True)
+            row.addWidget(lbl, 1)
+            go = QPushButton("Open Inbox")
+            go.setObjectName("ghost")
+            go.clicked.connect(lambda: self.main.goto("inbox"))
+            row.addWidget(go)
+            note.body.addLayout(row)
+            self.lay.addWidget(note)
+
         # Tiles
         tiles = QHBoxLayout()
         tiles.setSpacing(10)
@@ -156,6 +176,8 @@ class HomeScreen(Screen):
         grid.setColumnStretch(1, 2)
         self.lay.addLayout(grid)
         self.lay.addStretch(1)
+        # Scroll rather than squash the cards when the window is short
+        self.inner.setMinimumHeight(self.inner.sizeHint().height())
 
     def _guidance(self):
         lg, team = self.lg, self.user
@@ -377,6 +399,107 @@ def news_html(items):
     if not rows:
         rows.append(f"<span style='color:{T('muted')}'>Nothing yet.</span>")
     return "".join(rows)
+
+
+# ── Inbox ─────────────────────────────────────────────────────────────────────
+
+PRIORITY_COLORS = {1: "bad", 2: "warn", 3: "info"}
+PRIORITY_WORDS = {1: "ACT NOW", 2: "SOON", 3: "FYI"}
+
+
+def run_inbox_action(main, item, action):
+    """Carry out one inbox button: inline actions, dialogs or navigation."""
+    lg = main.lg
+    if action in inbox.GO:
+        main.goto(inbox.GO[action])
+        return
+    p = lg.find_player(item["pid"]) if item.get("pid") is not None else None
+    if action == "open_player":
+        if p is not None:
+            main.open_player(p.id)
+        return
+    if action == "negotiate":
+        if p is not None:
+            from ui_dialogs import OfferDialog
+            if OfferDialog(main, p, resign=True).exec():
+                main.refresh_all()
+        return
+    if action == "accept_offer" and not confirm(main, "Accept offer", "Accept this trade?"):
+        return
+    if action == "tag" and p is not None and not confirm(
+            main, "Franchise tag", f"Tag {p.name} for one season at {money(rr.tag_amount(lg, p))}?"):
+        return
+    ok, msg = inbox.act(lg, item, action)
+    if not ok or action in ("accept_offer", "tag"):
+        info(main, "Inbox", msg)
+    main.status(msg)
+    main.refresh_all()
+
+
+def inbox_row(main, item):
+    row = QWidget()
+    lay = QHBoxLayout(row)
+    lay.setContentsMargins(0, 2, 0, 2)
+    lay.setSpacing(10)
+    col = T(PRIORITY_COLORS[item["priority"]])
+    text = QLabel(f"<span style='color:{col}; font-weight:800'>{PRIORITY_WORDS[item['priority']]}</span>"
+                  f"&nbsp; <b>{item['title']}</b><br><span style='color:{T('text2')}'>{item['detail']}</span>")
+    text.setTextFormat(Qt.TextFormat.RichText)
+    text.setWordWrap(True)
+    lay.addWidget(text, 1)
+    for i, (action, label) in enumerate(item["actions"]):
+        b = QPushButton(label)
+        if i > 0:
+            b.setObjectName("ghost")
+        b.clicked.connect(lambda _c=False, a=action, it=item: run_inbox_action(main, it, a))
+        lay.addWidget(b)
+    return row
+
+
+def inbox_card(main, items, limit=None, title="Needs a Decision"):
+    shown = items if limit is None else items[:limit]
+    right = None
+    if limit is not None and len(items) > limit:
+        right = QPushButton(f"All {len(items)} ▸")
+        right.setObjectName("ghost")
+        right.clicked.connect(lambda: main.goto("inbox"))
+    card = Card(title, right=right)
+    for i, it in enumerate(shown):
+        if i:
+            card.add(divider())
+        card.add(inbox_row(main, it))
+    return card
+
+
+class InboxScreen(Screen):
+    title = "Inbox"
+    subtitle = "Decisions waiting on you. News stays on the News screen."
+
+    def __init__(self, main):
+        super().__init__(main)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        self.inner = QWidget()
+        self.inner.setObjectName("screen")
+        self.lay = QVBoxLayout(self.inner)
+        self.lay.setContentsMargins(0, 0, 4, 0)
+        self.lay.setSpacing(12)
+        scroll.setWidget(self.inner)
+        self.outer.addWidget(scroll, 1)
+
+    def refresh(self):
+        clear_layout(self.lay)
+        items = inbox.action_items(self.lg)
+        n1 = sum(1 for it in items if it["priority"] == 1)
+        self.set_subtitle(f"{len(items)} item{'s' if len(items) != 1 else ''}"
+                          f"{f', {n1} need action now' if n1 else ''}. News stays on the News screen.")
+        if not items:
+            lbl = QLabel("Nothing needs a decision right now.")
+            lbl.setObjectName("muted")
+            self.lay.addWidget(lbl)
+        else:
+            self.lay.addWidget(inbox_card(self.main, items, title="To Do"))
+        self.lay.addStretch(1)
 
 
 # ── Roster ────────────────────────────────────────────────────────────────────
