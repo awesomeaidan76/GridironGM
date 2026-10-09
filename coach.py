@@ -19,28 +19,28 @@ import names
 #   tempo      : pace (0 slow .. 1 hurry-up)
 #   screen     : screen game usage (0..1)
 OFFENSIVE_SCHEMES = {
-    "West Coast":    dict(pass_lean=0.15, deep=-0.45, outside=0.45, qb_run=0.05,
+    "West Coast":    dict(pass_lean=0.10, deep=-0.55, outside=0.45, qb_run=0.05,
                           heavy=0.30, tempo=0.45, screen=0.55),
-    "Air Coryell":   dict(pass_lean=0.25, deep=0.60, outside=0.40, qb_run=0.05,
+    "Air Coryell":   dict(pass_lean=0.22, deep=0.75, outside=0.40, qb_run=0.05,
                           heavy=0.30, tempo=0.50, screen=0.25),
-    "Air Raid":      dict(pass_lean=0.50, deep=0.10, outside=0.55, qb_run=0.10,
-                          heavy=0.00, tempo=0.85, screen=0.50),
-    "Run and Shoot": dict(pass_lean=0.40, deep=0.30, outside=0.50, qb_run=0.05,
+    "Air Raid":      dict(pass_lean=0.55, deep=0.05, outside=0.55, qb_run=0.10,
+                          heavy=0.00, tempo=0.85, screen=0.55),
+    "Run and Shoot": dict(pass_lean=0.55, deep=0.35, outside=0.50, qb_run=0.05,
                           heavy=0.00, tempo=0.65, screen=0.30),
-    "Spread Option": dict(pass_lean=0.00, deep=0.00, outside=0.60, qb_run=0.65,
+    "Spread Option": dict(pass_lean=-0.10, deep=0.00, outside=0.60, qb_run=0.92,
                           heavy=0.10, tempo=0.75, screen=0.45),
-    "Power Run":     dict(pass_lean=-0.40, deep=0.15, outside=0.20, qb_run=0.05,
+    "Power Run":     dict(pass_lean=-0.50, deep=0.15, outside=0.20, qb_run=0.05,
                           heavy=0.80, tempo=0.25, screen=0.20),
-    "Zone Run":      dict(pass_lean=-0.15, deep=0.00, outside=0.75, qb_run=0.10,
+    "Zone Run":      dict(pass_lean=-0.25, deep=0.00, outside=0.75, qb_run=0.10,
                           heavy=0.55, tempo=0.45, screen=0.35),
     "Pro Style":     dict(pass_lean=0.00, deep=0.05, outside=0.45, qb_run=0.05,
                           heavy=0.45, tempo=0.45, screen=0.35),
     # Systems borrowed from the college and high-school game
-    "Pistol":        dict(pass_lean=-0.05, deep=0.10, outside=0.50, qb_run=0.45,
+    "Pistol":        dict(pass_lean=-0.15, deep=0.10, outside=0.50, qb_run=0.55,
                           heavy=0.35, tempo=0.55, screen=0.35),
-    "Wing-T":        dict(pass_lean=-0.45, deep=0.20, outside=0.55, qb_run=0.20,
+    "Wing-T":        dict(pass_lean=-0.80, deep=0.35, outside=0.55, qb_run=0.20,
                           heavy=0.85, tempo=0.30, screen=0.10),
-    "Flexbone":      dict(pass_lean=-0.65, deep=0.45, outside=0.50, qb_run=0.85,
+    "Flexbone":      dict(pass_lean=-1.00, deep=0.80, outside=0.50, qb_run=0.90,
                           heavy=0.20, tempo=0.35, screen=0.05),
 }
 
@@ -66,6 +66,50 @@ SCHEME_CONCEPTS = {
     "Wing-T":        dict(play_action=0.80, rpo=0.05, trick=0.60),
     "Flexbone":      dict(play_action=0.85, rpo=0.05, trick=0.45),
 }
+
+# Situational play-calling by system (each coordinator varies around these):
+#   sit_early : pass lean on 1st/2nd down        sit_short: pass lean on 3rd/4th & short
+#   sit_rz    : pass lean in the red zone         sit_shot : appetite for shot plays on 1st down
+#   sit_long  : screens and draws on 3rd & long ("take the points, punt it" calls)
+SCHEME_SITUATIONAL = {
+    "West Coast":    dict(sit_early=0.04, sit_short=0.06, sit_rz=0.04, sit_shot=0.25, sit_long=0.45),
+    "Air Coryell":   dict(sit_early=0.04, sit_short=0.00, sit_rz=0.02, sit_shot=0.75, sit_long=0.20),
+    "Air Raid":      dict(sit_early=0.06, sit_short=0.10, sit_rz=0.06, sit_shot=0.45, sit_long=0.30),
+    "Run and Shoot": dict(sit_early=0.05, sit_short=0.08, sit_rz=0.05, sit_shot=0.55, sit_long=0.25),
+    "Spread Option": dict(sit_early=-0.02, sit_short=-0.06, sit_rz=-0.03, sit_shot=0.40, sit_long=0.35),
+    "Power Run":     dict(sit_early=-0.05, sit_short=-0.12, sit_rz=-0.08, sit_shot=0.50, sit_long=0.35),
+    "Zone Run":      dict(sit_early=-0.03, sit_short=-0.08, sit_rz=-0.05, sit_shot=0.45, sit_long=0.30),
+    "Pro Style":     dict(sit_early=0.00, sit_short=-0.04, sit_rz=0.00, sit_shot=0.45, sit_long=0.30),
+    "Pistol":        dict(sit_early=-0.02, sit_short=-0.06, sit_rz=-0.03, sit_shot=0.45, sit_long=0.30),
+    "Wing-T":        dict(sit_early=-0.06, sit_short=-0.15, sit_rz=-0.10, sit_shot=0.55, sit_long=0.30),
+    "Flexbone":      dict(sit_early=-0.08, sit_short=-0.18, sit_rz=-0.12, sit_shot=0.70, sit_long=0.15),
+}
+SIT_KEYS = ("sit_early", "sit_short", "sit_rz", "sit_shot", "sit_long")
+
+# What each system does especially well when it is run properly (small, opposite-signed
+# edges so that no system is simply best):
+#   short_comp / short_yac: timing and spacing on quick throws (completion %, YAC multiplier)
+#   run_edge: blocking edge for its run game (misdirection teams are hard to prepare for)
+SCHEME_EXECUTION = {
+    "West Coast": dict(short_comp=0.03, short_yac=1.15, run_edge=0.0),
+    "Air Raid": dict(short_comp=0.015, short_yac=1.05, run_edge=-0.05),
+    "Run and Shoot": dict(short_comp=0.01, short_yac=1.05, run_edge=-0.05),
+    "Wing-T": dict(short_comp=0.0, short_yac=1.0, run_edge=0.20),
+    "Flexbone": dict(short_comp=0.0, short_yac=1.0, run_edge=0.24),
+    "Power Run": dict(short_comp=0.0, short_yac=1.0, run_edge=0.08),
+    "Zone Run": dict(short_comp=0.0, short_yac=1.0, run_edge=0.05),
+    "Pistol": dict(short_comp=0.0, short_yac=1.0, run_edge=0.06),
+    "Spread Option": dict(short_comp=0.01, short_yac=1.05, run_edge=0.05),
+}
+
+
+def sit_tendency(coach, key):
+    """A coordinator's situational tendency (filled in from his system for older saves)."""
+    t = coach.tendencies
+    if key not in t:
+        t[key] = SCHEME_SITUATIONAL.get(coach.off_scheme, SCHEME_SITUATIONAL["Pro Style"])[key]
+    return t[key]
+
 
 # Defensive philosophies
 #   blitz : extra rushers rate (0..1)
@@ -122,6 +166,10 @@ class Coach:
         de = dict(base_def or DEFENSIVE_SCHEMES[self.def_scheme])
         t = {}
         for k, v in off.items():
+            if k.startswith("sit_") or not isinstance(v, (int, float)) or k in ("blitz", "zone", "two_high",
+                                                                                "aggression", "committee",
+                                                                                "play_action", "rpo", "trick"):
+                continue
             lo, hi = (-1.0, 1.0) if k in ("pass_lean", "deep") else (0.0, 1.0)
             t[k] = max(lo, min(hi, v + random.gauss(0, noise)))
         for k in ("blitz", "zone", "two_high"):
@@ -134,6 +182,13 @@ class Coach:
         for k in ("play_action", "rpo", "trick"):
             b = (base_off or {}).get(k, concepts.get(k, 0.4))
             t[k] = max(0.0, min(1.0, b + random.gauss(0, 0.10)))
+        sit = SCHEME_SITUATIONAL.get(self.off_scheme, SCHEME_SITUATIONAL["Pro Style"])
+        for k in SIT_KEYS:
+            b = (base_off or {}).get(k, sit[k])
+            if k in ("sit_shot", "sit_long"):
+                t[k] = max(0.0, min(1.0, b + random.gauss(0, noise * 1.5)))
+            else:
+                t[k] = max(-0.25, min(0.25, b + random.gauss(0, noise * 0.5)))
         self.tendencies = t
 
     def r(self, key):

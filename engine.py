@@ -26,6 +26,7 @@ import advanced as adv_lib
 import trenches
 import grades
 import situations as sit_lib
+from coach import sit_tendency, SCHEME_EXECUTION
 
 QUARTER = 900
 
@@ -1210,6 +1211,14 @@ class GameSim:
             p += 0.02
         elif self.yl >= 85:
             p += 0.04
+        # The coordinator's own situational habits
+        oc = self.poss.team.coach
+        if d <= 2:
+            p += sit_tendency(oc, "sit_early")
+        elif t <= 2:
+            p += sit_tendency(oc, "sit_short")
+        if self.yl >= 80:
+            p += sit_tendency(oc, "sit_rz")
         diff = self.poss.score - self.dfn.score
         mode = self.urgency(self.poss)
         if mode == "hurry":
@@ -1307,7 +1316,7 @@ class GameSim:
                 random.random() < 0.010 * plan["trick"]:
             out = self._trick_play()
         elif normal and self.down <= 3 and self.togo <= 10 and self.yl < 97 and \
-                random.random() < plan["rpo"] * 0.11:
+                random.random() < plan["rpo"] * 0.16:
             out = self._rpo()
         elif hail or random.random() < self._pass_probability():
             out = self.pass_play(hail=hail)
@@ -1321,8 +1330,21 @@ class GameSim:
 
     def _ep_pre(self):
         side = self.poss
+        self._pre_sit = (self.down, self.togo, self.yl)
         return (side, self.other(side), adv_lib.expected_points(self.down, self.togo, self.yl),
                 side.score, self.other(side).score, self.quarter, self.togo)
+
+    @staticmethod
+    def sit_bucket(down, togo, yl):
+        if yl >= 80:
+            return "Red zone"
+        if down <= 2:
+            return "1st & 2nd down"
+        if togo <= 2:
+            return "3rd/4th & short"
+        if togo <= 6:
+            return "3rd/4th & medium"
+        return "3rd/4th & long"
 
     def _credit_adv(self, pre, out):
         if self._adv_void:
@@ -1363,6 +1385,13 @@ class GameSim:
                 ts_def[f"dc|{fam}|epa"] += e
                 if good:
                     ts_def[f"dc|{fam}|s"] += 1
+        # Tendency tracking by situation (for scouting reports)
+        a0 = self._adv or {}
+        is_pass = out["kind"] in ("pass", "sack") or a0.get("qb") is not None
+        b = self.sit_bucket(*getattr(self, "_pre_sit", (self.down, self.togo, self.yl)))
+        ts_off[f"sit|{b}|n"] += 1
+        if is_pass:
+            ts_off[f"sit|{b}|p"] += 1
         g = self.gstats[side.abbr]
         if out["kind"] == "run" or (self._adv or {}).get("rusher") is not None:
             g["run_n"] += 1
@@ -1709,10 +1738,15 @@ class GameSim:
         if hail:
             ptype = "hail"
         else:
-            deep = 0.125 + 0.07 * plan["deep"] - 0.06 * dplan["two_high"]
+            deep = 0.125 + 0.10 * plan["deep"] - 0.06 * dplan["two_high"]
             deep += (e(qb, "throw_power") - 75) / 600.0
             screen = 0.025 + 0.09 * plan["screen"]
-            medium = 0.28
+            medium = 0.28 + 0.05 * plan["deep"]
+            oc = off.team.coach
+            if self.down == 1 and self.togo >= 10 and 30 <= self.yl <= 65:
+                deep += 0.09 * sit_tendency(oc, "sit_shot")           # shot play
+            if self.down >= 3 and self.togo >= 9:
+                screen += 0.10 * sit_tendency(oc, "sit_long")         # give-up screen
             if self.togo >= 12:
                 medium += 0.06
                 deep += 0.03
@@ -1757,6 +1791,13 @@ class GameSim:
                                    prefs=getattr(off.team, "play_prefs", None),
                                    rpo=bool(call.get("rpo")), form=form_name)
         self._ocall = play["name"]
+        self._track_form(off, pers, form_name)
+        if pa:
+            self.ts(off, "pa_att")
+        if ptype == "screen":
+            self.ts(off, "screen_att")
+        if call.get("rpo") or call.get("rpo_bad"):
+            self.ts(off, "rpo_pass")
         slot_of = self._slot_map(pers, wrs, tes, rb, fbp)
         route_of = {p.id: play["routes"].get(slot, "block") for slot, p in slot_of.items()}
 
@@ -1991,6 +2032,9 @@ class GameSim:
             p_comp -= 0.05 if to_goal > 10 else (0.16 if to_goal > 3 else 0.12)
         if hail:
             p_comp = 0.06
+        ex = SCHEME_EXECUTION.get(off.team.coach.off_scheme)
+        if ex and ptype in ("short", "screen"):
+            p_comp += ex["short_comp"]
         p_comp = _clip(p_comp * self.comp_mult, 0.04, 0.94)
 
         # Interception
@@ -2132,6 +2176,9 @@ class GameSim:
         off = self.poss
         to_goal = 100 - self.yl
         yac_mean = {"screen": 5.5, "short": 3.45, "medium": 2.75, "deep": 3.0, "hail": 1.0}[ptype]
+        ex = SCHEME_EXECUTION.get(off.team.coach.off_scheme)
+        if ex and ptype in ("short", "screen"):
+            yac_mean *= ex["short_yac"]
         skill = e(rec, "speed") * 0.28 + e(rec, "agility") * 0.22 + e(rec, "break_tackle") * 0.18 \
             + e(rec, "acceleration") * 0.17 + e(rec, "vision") * 0.15
         tk = sum(e(t, "tackling") * 0.6 + e(t, "pursuit") * 0.4 for t in tacklers[:5]) \
@@ -2297,6 +2344,13 @@ class GameSim:
         if first is not None:
             self._charge_block(first, "pressures_allowed")
 
+    def _track_form(self, side, pers, form):
+        """Personnel and shotgun usage (for scouting reports and scheme profiles)."""
+        ts = self.res.team_stats[side.abbr]
+        ts[f"pers|{pers}"] += 1
+        if pb.FORMATIONS.get(form, {}).get("qb", -1) <= -4:
+            ts["gun_snaps"] += 1
+
     def _record_run_blocks(self, events, yards):
         for b, d, margin, poa in events:
             if b is not None:
@@ -2369,6 +2423,7 @@ class GameSim:
             "power": 0.25 + 0.70 * plan["heavy"] + (0.8 if short else 0.0),
             "counter": 0.15 + 0.25 * plan["trick"],
             "draw": 0.06 + (0.55 if self.down >= 2 and self.togo >= 7 else 0.0)
+            + (0.6 * sit_tendency(self.poss.team.coach, "sit_long") if self.down >= 3 and self.togo >= 9 else 0.0)
             + 0.25 * max(0.0, plan["pass_rate"] - 0.5),
             "toss": 0.06 + 0.25 * out,
         })
@@ -2409,10 +2464,11 @@ class GameSim:
         self.ts(off, "plays")
         slot_of = self._slot_map(pers, wrs, tes, rb, fbp)
         dc = self._def_call(len(cbs))
+        gun = 0.25 + 0.5 * plan["tempo"] + 0.3 * plan["qb_run"]
+        run_form = pb.choose_formation(pers, run=True, gun_bias=min(1.0, gun), scheme=off.team.coach.off_scheme)
+        self._track_form(off, pers, run_form)
         if self.diagrams:
-            gun = 0.25 + 0.5 * plan["tempo"] + 0.3 * plan["qb_run"]
-            self.cur_diag = {"form": pb.choose_formation(pers, run=True, gun_bias=min(1.0, gun),
-                                                         scheme=off.team.coach.off_scheme),
+            self.cur_diag = {"form": run_form,
                              "pers": pers, "mirror": False, "routes": {},
                              "names": {s: (p.jersey, _short(p.name)) for s, p in slot_of.items()},
                              "cov": dc["cov"], "front": dc["front"], "blitz": dc["blitz"],
@@ -2422,7 +2478,7 @@ class GameSim:
         if not call:
             # Designed QB run?
             qb_mob = (e(qb, "speed") - 65) / 30.0
-            if random.random() < plan["qb_run"] * 0.19 * _clip(0.5 + qb_mob, 0.2, 1.6):
+            if random.random() < plan["qb_run"] * 0.22 * _clip(0.5 + qb_mob, 0.2, 1.6):
                 if self.cur_diag is not None:
                     self.cur_diag.update(run="qb run", carrier="QB", play="QB Keeper")
                 return self._qb_run(qb, scramble=False, lbs=lbs, ss=ss, dts=dts)
@@ -2523,6 +2579,9 @@ class GameSim:
         box += dfn_lib.run_edge(dc, inside=not outside) + dc["box"] * 1.3
         extra -= box + (staff_mod.def_calling(de.team) - 10) * 0.3
         bd += extra / 28.0 + RUN_BLOCK_SHIFT
+        ex = SCHEME_EXECUTION.get(off.team.coach.off_scheme)
+        if ex:
+            bd += ex["run_edge"]
         self._run_events = blk_events
 
         # Concept-specific edges

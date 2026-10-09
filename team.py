@@ -266,7 +266,7 @@ class Team:
         roster_lean = max(-0.07, min(0.07, (pass_score - run_score) / 150.0)) * adapt
 
         plan = {
-            "pass_rate": 0.545 + 0.16 * t["pass_lean"] + roster_lean,
+            "pass_rate": 0.545 + 0.21 * t["pass_lean"] + roster_lean,
             "deep": t["deep"],
             "outside": t["outside"],
             "qb_run": t["qb_run"],
@@ -306,7 +306,7 @@ class Team:
             plan["rpo"] += (tac.get("play_action", 50) - 50) / 50.0 * 0.35
             plan["trick"] += (tac.get("trickery", 50) - 50) / 50.0 * 0.6
 
-        plan["pass_rate"] = max(0.36, min(0.69, plan["pass_rate"]))
+        plan["pass_rate"] = max(0.28, min(0.74, plan["pass_rate"]))
         plan["deep"] = max(-1.0, min(1.0, plan["deep"]))
         for k in ("outside", "qb_run", "heavy", "tempo", "screen", "aggression",
                   "blitz", "zone", "two_high", "committee", "play_action", "rpo", "trick"):

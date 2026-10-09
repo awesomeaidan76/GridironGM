@@ -443,6 +443,10 @@ def load_user_plays():
     return loaded
 
 
+GUN_SYSTEMS = ("Air Raid", "Run and Shoot", "Spread Option")
+UNDER_CENTER_SYSTEMS = ("Power Run", "Wing-T", "Pro Style")
+
+
 def choose_formation(pers, run, gun_bias=0.5, rng=random, scheme=None):
     forms = (RUN_FORMS if run else PASS_FORMS).get(pers) or ["Gun Doubles"]
     prefs = SCHEME_FORMS.get(scheme, {})
@@ -452,6 +456,10 @@ def choose_formation(pers, run, gun_bias=0.5, rng=random, scheme=None):
         w = 1.0 + (gun_bias if gun else (1 - gun_bias)) * 1.5
         if f in ("Wing-T", "Flexbone") and f not in prefs:
             w *= 0.05                       # only option/Wing-T teams line up like this
+        if not gun and scheme in GUN_SYSTEMS:
+            w *= 0.15                       # spread systems live in the shotgun
+        elif gun and scheme in UNDER_CENTER_SYSTEMS:
+            w *= 0.45
         weights.append(w * prefs.get(f, 1.0))
     return rng.choices(forms, weights=weights)[0]
 
