@@ -1025,12 +1025,12 @@ class GameSim:
         acc = self.e(k, "kick_accuracy")
         power = self.e(k, "kick_power")
         comp = self.e(k, "composure")
-        d50 = 54.0 + (acc - 77) * 0.50 + (power - 77) * 0.32 + (comp - 70) * 0.06
+        d50 = 58.0 + (acc - 69) * 0.50 + (power - 69) * 0.32 + (comp - 70) * 0.06
         d50 += (self.fg_mult - 1.0) * 30
-        return _sig((d50 - dist - self.wx["fg_dist"]) / 5.6)
+        return _sig((d50 - dist - self.wx["fg_dist"]) / 7.0)
 
     def fg_range(self, k):
-        return 47 + (self.e(k, "kick_power") - 60) * 0.42 - self.wx["fg_dist"]
+        return 55 + (self.e(k, "kick_power") - 69) * 0.42 - self.wx["fg_dist"]
 
     def field_goal(self):
         k = self.poss.lu["K"][0]
