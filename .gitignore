@@ -6,3 +6,5 @@ settings.json
 gridiron_errors.log
 tools/_test_settings.json
 *.zip
+ui_state.json
+tools/_test_ui_state.json

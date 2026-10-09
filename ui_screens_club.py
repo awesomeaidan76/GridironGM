@@ -386,8 +386,8 @@ class RosterScreen(Screen):
 
     def __init__(self, main):
         super().__init__(main)
-        self.filter = "ALL"
-        chips, self.get_filter = filter_chips(ROSTER_FILTERS, self._set_filter)
+        chips, self.get_filter = filter_chips(ROSTER_FILTERS, self._set_filter, state_key="roster")
+        self.filter = self.get_filter()
         self.outer.addWidget(chips)
         self.table = DataTable([], stretch=1)
         self.table.on_activate = self.main.open_player
@@ -1230,9 +1230,9 @@ class FinancesScreen(Screen):
         for t in (self.t_cap, self.t_pay, self.t_space, self.t_dead, self.t_next):
             tiles.addWidget(t)
         self.outer.addLayout(tiles)
-        chips, _ = filter_chips([("all", "All Contracts"), ("expiring", "Expiring"),
-                                 ("rookie", "Rookie Deals")], self._set_filter)
-        self.filter = "all"
+        chips, get = filter_chips([("all", "All Contracts"), ("expiring", "Expiring"),
+                                   ("rookie", "Rookie Deals")], self._set_filter, state_key="finances")
+        self.filter = get()
         self.outer.addWidget(chips)
         self.table = DataTable(["Name", "Pos", "Age", "OVR", "Salary", "Yrs", "Market Value",
                                 "Value / Cost", "Morale", "Status"], stretch=0)

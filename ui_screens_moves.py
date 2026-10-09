@@ -26,8 +26,8 @@ class DraftScreen(Screen):
 
     def __init__(self, main):
         super().__init__(main)
-        self.filter = "ALL"
-        chips, _ = filter_chips(POS_GROUP_FILTERS[:-1], self._set_filter)
+        chips, get = filter_chips(POS_GROUP_FILTERS[:-1], self._set_filter, state_key="draft")
+        self.filter = get()
         self.outer.addWidget(chips)
         body = QHBoxLayout()
         body.setSpacing(12)
@@ -205,8 +205,8 @@ class FreeAgencyScreen(Screen):
         for t in (self.t_space, self.t_roster, self.t_pool):
             tiles.addWidget(t)
         self.outer.addLayout(tiles)
-        self.filter = "ALL"
-        chips, _ = filter_chips(POS_GROUP_FILTERS[:-1], self._set_filter)
+        chips, get = filter_chips(POS_GROUP_FILTERS[:-1], self._set_filter, state_key="fa")
+        self.filter = get()
         self.outer.addWidget(chips)
         self.table = DataTable(["Name", "Pos", "Age", "OVR", "POT", "Asking", "Market", "Interest",
                                 "Personality", "Archetype"], stretch=0)

@@ -22,8 +22,10 @@ Franchise, NBA 2K MyLeague/MyGM, Draft Day Sports, Pro Strategy Football and Mot
 - 🔜 **Actionable inbox / to-do.** Group "needs a decision" items (expiring deals, offers, illegal
   depth chart, holdouts, roster over the limit) apart from news, with buttons to act on each item
   inline (as in FM27's inbox redesign).
-- 🔜 **Persistent table state.** Keep sort, filters and scroll position per screen, plus back and
-  forward navigation (the top complaints about FM26).
+- ✅ **Persistent table state.** Every table keeps its sort order between sessions and its scroll
+  position when it refreshes; filter chips (Roster, Finances, Standings, Stats, News, Draft, Free
+  Agency) are remembered too (`ui_state.json`). Back and forward buttons in the top bar, or
+  Alt+Left / Alt+Right, step through the screens you visited (the top complaints about FM26).
 - 🔜 **Trading block.** List players and ask every club for offers, with a "what would make this
   work?" button and filters by asset type (ZenGM).
 - 🔜 **Multi-year cap planner.** Committed money by year, dead money, expiring players and

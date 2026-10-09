@@ -24,7 +24,7 @@ from ui_screens_league import (GameCenterScreen, HistoryScreen, NewsScreen, Play
                                TeamsScreen, GlossaryScreen)
 from ui_screens_moves import DraftScreen, FreeAgencyScreen, TradeScreen
 from ui_theme import T, accent, stylesheet, palette
-from ui_widgets import TeamBadge, confirm, info
+from ui_widgets import DataTable, TeamBadge, confirm, info
 
 NAV = [
     ("MY CLUB", [("home", "Home"), ("roster", "Roster"), ("depth", "Depth Chart"),
@@ -125,6 +125,11 @@ class MainWindow(QMainWindow):
             scr = cls(self)
             self.screens[key] = scr
             self.stack.addWidget(scr)
+            for attr, val in vars(scr).items():
+                if isinstance(val, DataTable):
+                    val.remember(f"{key}.{attr}")      # sort order kept between sessions
+        self._history = []
+        self._hist_pos = -1
         body.addWidget(self.stack, 1)
         root.addLayout(body, 1)
         self.status_label = QLabel("")
@@ -134,6 +139,10 @@ class MainWindow(QMainWindow):
         self._sc_continue.activated.connect(self.continue_clicked)
         self._sc_save = QShortcut(QKeySequence("Ctrl+S"), self)
         self._sc_save.activated.connect(self.quick_save)
+        self._sc_back = QShortcut(QKeySequence("Alt+Left"), self)
+        self._sc_back.activated.connect(self.go_back)
+        self._sc_fwd = QShortcut(QKeySequence("Alt+Right"), self)
+        self._sc_fwd.activated.connect(self.go_forward)
         self.goto("home")
         self.refresh_topbar()
         WINDOWS.append(self)
@@ -147,6 +156,16 @@ class MainWindow(QMainWindow):
         lay = QHBoxLayout(bar)
         lay.setContentsMargins(16, 8, 16, 8)
         lay.setSpacing(10)
+        self.back_btn = QToolButton()
+        self.back_btn.setText("◀")
+        self.back_btn.setToolTip("Back (Alt+Left)")
+        self.back_btn.clicked.connect(self.go_back)
+        lay.addWidget(self.back_btn)
+        self.fwd_btn = QToolButton()
+        self.fwd_btn.setText("▶")
+        self.fwd_btn.setToolTip("Forward (Alt+Right)")
+        self.fwd_btn.clicked.connect(self.go_forward)
+        lay.addWidget(self.fwd_btn)
         logo = QLabel("GRIDIRON GM")
         logo.setStyleSheet(f"color: {accent()}; font-weight: 900; font-size: {settings['font_size'] + 3}px;")
         lay.addWidget(logo)
@@ -230,7 +249,7 @@ class MainWindow(QMainWindow):
                 lay.addWidget(b)
                 self.nav_buttons[key] = b
         lay.addStretch(1)
-        hint = QLabel("Ctrl+Space: Continue\nCtrl+S: Save")
+        hint = QLabel("Ctrl+Space: Continue\nCtrl+S: Save\nAlt+←/→: Back / Forward")
         hint.setObjectName("muted")
         lay.addWidget(hint)
         scroll = QScrollArea()
@@ -255,17 +274,34 @@ class MainWindow(QMainWindow):
 
     # ── Navigation ───────────────────────────────────────────────────────────
 
-    def goto(self, key):
+    def goto(self, key, _from_history=False):
         if self.busy:
             for k, b in self.nav_buttons.items():
                 b.setChecked(k == self.current)
             return
+        if not _from_history and (not self._history or self._history[self._hist_pos] != key):
+            del self._history[self._hist_pos + 1:]
+            self._history.append(key)
+            self._history = self._history[-50:]
+            self._hist_pos = len(self._history) - 1
         self.current = key
+        self.back_btn.setEnabled(self._hist_pos > 0)
+        self.fwd_btn.setEnabled(self._hist_pos < len(self._history) - 1)
         for k, b in self.nav_buttons.items():
             b.setChecked(k == key)
         scr = self.screens[key]
         self.stack.setCurrentWidget(scr)
         self._safe_refresh(scr)
+
+    def go_back(self):
+        if self._hist_pos > 0 and not self.busy:
+            self._hist_pos -= 1
+            self.goto(self._history[self._hist_pos], _from_history=True)
+
+    def go_forward(self):
+        if self._hist_pos < len(self._history) - 1 and not self.busy:
+            self._hist_pos += 1
+            self.goto(self._history[self._hist_pos], _from_history=True)
 
     def _safe_refresh(self, scr):
         try:

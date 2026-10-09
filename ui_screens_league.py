@@ -488,9 +488,9 @@ class StandingsScreen(Screen):
 
     def __init__(self, main):
         super().__init__(main)
-        self.mode = "division"
-        chips, _ = filter_chips([("division", "Divisions"), ("conference", "Conference / Seeds"),
-                                 ("league", "League")], self._set_mode)
+        chips, get = filter_chips([("division", "Divisions"), ("conference", "Conference / Seeds"),
+                                   ("league", "League")], self._set_mode, state_key="standings")
+        self.mode = get()
         self.outer.addWidget(chips)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -580,8 +580,8 @@ class StatsScreen(Screen):
 
     def __init__(self, main):
         super().__init__(main)
-        self.group = "Passing"
-        chips, _ = filter_chips(STAT_TABS, self._set_group)
+        chips, get = filter_chips(STAT_TABS, self._set_group, "Passing", state_key="stats")
+        self.group = get()
         self.outer.addWidget(chips)
         bar = QHBoxLayout()
         bar.addWidget(QLabel("Season:"))
@@ -1283,11 +1283,11 @@ class NewsScreen(Screen):
 
     def __init__(self, main):
         super().__init__(main)
-        self.cat = "mine"
-        chips, _ = filter_chips([("mine", "My Club"), ("all", "Everything"), ("Injury", "Injuries"),
-                                 ("Signing", "Signings"), ("Trade", "Trades"), ("Draft", "Draft"),
-                                 ("Coaching", "Coaching"), ("Awards", "Awards"),
-                                 ("Performance", "Performances")], self._set_cat, "mine")
+        chips, get = filter_chips([("mine", "My Club"), ("all", "Everything"), ("Injury", "Injuries"),
+                                   ("Signing", "Signings"), ("Trade", "Trades"), ("Draft", "Draft"),
+                                   ("Coaching", "Coaching"), ("Awards", "Awards"),
+                                   ("Performance", "Performances")], self._set_cat, "mine", state_key="news")
+        self.cat = get()
         self.outer.addWidget(chips)
         self.tabs = QTabWidget()
         self.feed = QTextBrowser()
