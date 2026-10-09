@@ -222,7 +222,9 @@ class DataTable(QTableWidget):
         sort_col = hh.sortIndicatorSection()
         sort_order = hh.sortIndicatorOrder()
         self.setSortingEnabled(False)
-        self.clearContents()
+        # Drop the old rows rather than clearContents(): refilling a table that has been sorted
+        # with clearContents() is quadratic in Qt 6 (a 1,500-row Players list took minutes).
+        self.setRowCount(0)
         self.setRowCount(len(rows))
         bold = QFont()
         bold.setBold(True)
