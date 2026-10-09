@@ -243,3 +243,284 @@ def front_office_desc():
                 "veterans. Coaches who trust youth give young players the edge on close depth-chart calls; "
                 "rebuilding clubs play the kids even more."))
     return out
+
+
+# ── Table columns (shown when hovering over a column header) ─────────────────
+
+COLUMN_DESC = {
+    # Players and contracts
+    "OVR": "Overall: how good he is right now at his position, 1-99. 74 is an average starter, 82+ Pro Bowl, 90+ elite.",
+    "POT": "Potential: the best he is likely to become (a scouted range for young players).",
+    "OVR est": "Your scouts' estimate of his overall rating. More scouting narrows the error.",
+    "POT est": "Your scouts' estimate of his potential. More scouting narrows the error.",
+    "Overall": "Overall rating. For players 1-99 (74 = average starter); for coaches, staff and scouts, "
+               "their all-round ability.",
+    "Proj": "Where your scouts project him to be drafted.",
+    "Scouted": "How thoroughly your scouts have seen him. Better-scouted prospects have more accurate estimates.",
+    "Dev": "Development: how well this coach helps players improve.",
+    "Form": "Recent form: how well he has played in the last few games compared with his ability.",
+    "Morale": "Happiness, 1-100. Low morale hurts performance and makes contract talks harder.",
+    "Rep": "Reputation around the league, 0-100. Famous players cost more and draw more interest.",
+    "Personality": "How the staff read his character: work ethic, temperament and ambition.",
+    "Archetype": "The kind of player he is at his position (for example Power Back or Slot Receiver).",
+    "Arch": "The kind of player he is at his position (for example Power Back or Slot Receiver).",
+    "Role": "His best role at his position and his rating in it.",
+    "Best Role": "His best role at his position and his rating in it.",
+    "Salary": "This season's cap hit.",
+    "Yrs": "Seasons left on his contract.",
+    "Market": "What he would command on the open market each season.",
+    "Market Value": "What he would command on the open market each season.",
+    "Value / Cost": "Market value divided by salary. Above 1.0x he is a bargain; below 0.8x he is overpaid.",
+    "Asking": "What he is asking for per season.",
+    "Interest": "How keen he is on your club (Keen, Open or Reluctant): whether you contend, whether he "
+                "would start, your coach's reputation and your fan support.",
+    "Cap Space": "Salary cap minus payroll (including dead money).",
+    "Payroll": "Total cap hits this season, including dead money from released players.",
+    "Age": "Age in years.",
+    "40yd": "40-yard dash time at the combine (seconds; lower is faster).",
+    "Bench": "Bench press reps of 225 lb at the combine.",
+    "Vert": "Vertical jump at the combine (inches).",
+    "Stamina": "How long he can play at full effort before he needs a rest.",
+    # Games and standings
+    "GP": "Games played.",
+    "GS": "Games started.",
+    "W": "Wins.", "L": "Losses.", "T": "Ties.",
+    "Pct": "Percentage: winning % in standings (ties count half), completion % for passers, made % for kickers.",
+    "PF": "Points for.", "PA": "Points against.",
+    "Diff": "Point differential: points for minus points against.",
+    "Strk": "Current winning or losing streak.",
+    "Div": "Division. In the standings, the record against division opponents.",
+    "Conf": "Conference. In the standings, the record against conference opponents.",
+    "Home": "Record at home.", "Away": "Record on the road.",
+    "Pts/G": "Points per game.", "Yds/G": "Yards per game.",
+    "Pass/G": "Passing yards per game.", "Rush/G": "Rushing yards per game.",
+    "Y/Play": "Yards per play.",
+    "TO": "Turnovers: interceptions thrown plus fumbles lost.",
+    "Pen Yds": "Penalty yards.",
+    "Plays": "Offensive plays run.",
+    "Pass %": "Share of plays that were dropbacks (passes, sacks and scrambles).",
+    "3rd %": "Third-down conversion rate.",
+    "20+": "Plays that gained 20 yards or more.",
+    "Win %": "Winning percentage. For pass rushers, pass-rush win rate: how often he beat his block "
+             "(about 20% is average, 30%+ elite).",
+    # Snaps
+    "Snaps": "Plays he was on the field for.",
+    "Snap %": "Share of his side's snaps he played.",
+    "Off Snaps": "Offensive snaps played.", "Def Snaps": "Defensive snaps played.",
+    # Passing
+    "Cmp": "Completions.", "Att": "Attempts.", "Pass Att": "Pass attempts.",
+    "Cmp%": "Completion percentage.", "Comp %": "Completion percentage.",
+    "Yds": "Yards.", "Pass Yds": "Passing yards.", "Yards": "Yards.",
+    "TD": "Touchdowns.", "Pass TD": "Passing touchdowns.",
+    "Int": "Interceptions.", "INT %": "Interceptions per pass attempt.",
+    "Rate": "Passer rating (the NFL formula, 0-158.3).",
+    "Rating": "Passer rating (0-158.3). For a defender, the rating on throws at the receiver he covered.",
+    "Y/A": "Yards per pass attempt.", "Lng": "Longest play.", "Pass Lng": "Longest completion.",
+    "Sck": "Times sacked.", "Sack %": "Share of dropbacks that ended in a sack.",
+    "Dropbacks": "Pass attempts plus sacks plus scrambles: every time the quarterback dropped back to pass.",
+    "aDOT": "Average depth of target: how far past the line of scrimmage his passes (or targets) travel.",
+    "CAY/Cmp": "Completed air yards per completion: how far the ball travelled in the air on catches.",
+    "Pressured": "Dropbacks where the rush got home before the throw.",
+    "Pressure %": "Share of dropbacks where he was pressured.",
+    "Time to Throw": "Average seconds from snap to throw.",
+    "Checkdown %": "Share of throws to the checkdown (short safety-valve) option.",
+    "Tight Window %": "Share of throws into tight coverage, where the receiver was not open.",
+    "Throwaways": "Passes thrown away to avoid a sack.",
+    "Hot Reads": "Times he spotted a blitz before the snap and set a hot route to beat it.",
+    # Rushing
+    "Rush Att": "Rushing attempts.", "Rush Yds": "Rushing yards.",
+    "Rushes": "Rushing attempts. For pass rushers, the number of pass-rush reps.",
+    "Rush Avg": "Yards per carry.", "Rush TD": "Rushing touchdowns.", "Rush Lng": "Longest run.",
+    "Y/C": "Yards per carry.",
+    "YBC/Att": "Yards before contact per carry: room created by the blocking.",
+    "YAC/Att": "Yards after contact per carry: what the runner created himself.",
+    "Fum": "Fumbles.",
+    # Receiving
+    "Rec": "Receptions.", "Tgt": "Targets: passes thrown his way.",
+    "Tgt Share": "Share of the team's targets that went to him.",
+    "Catch%": "Receptions per target.", "Drop": "Dropped passes.",
+    "Y/Tgt": "Yards per target.", "YAC": "Yards after the catch.", "YAC/Rec": "Yards after the catch per reception.",
+    "1st Dn": "Plays that gained a first down or a touchdown.",
+    # EPA
+    "EPA": "Expected points added: how much his plays changed his team's expected points (see Glossary).",
+    "Total EPA": "Expected points added over the season.",
+    "EPA / play": "Average expected points added per play. Around 0 is average.",
+    "EPA/Att": "Expected points added per attempt.", "EPA/DB": "Expected points added per dropback.",
+    "EPA/Tgt": "Expected points added per target.", "Pass EPA/DB": "Passing EPA per dropback.",
+    "Off EPA/Play": "Offensive EPA per play (higher is better).",
+    "Def EPA/Play": "EPA allowed per play by the defense (lower is better).",
+    "Net EPA/Play": "Offensive EPA per play minus defensive EPA per play.",
+    "Success": "Share of plays with positive EPA. Good offenses are above 50%.",
+    "Off Success": "Offensive success rate (share of plays with positive EPA).",
+    "Def Success": "Success rate allowed by the defense (lower is better).",
+    # Line play
+    "Pass Pro": "Pass-blocking reps.",
+    "Press. Allowed": "Pressures charged to this blocker.",
+    "Pressure% Allowed": "Share of his pass-blocking reps that he lost for a pressure.",
+    "Hits Allowed": "Quarterback hits charged to this blocker.", "Sacks Allowed": "Sacks charged to this blocker.",
+    "Run Blocks": "Run-blocking reps at the point of attack.",
+    "Run Win %": "Share of run-blocking reps he won.",
+    "Pancakes": "Dominant run-block wins that put the defender on the ground.",
+    "Pressures": "Times he pressured the quarterback (sacks, hits and hurries).",
+    "Pressure% Made": "Share of his pass-rush reps that produced a pressure.",
+    "Double-teamed": "Share of his pass-rush reps where two blockers took him.",
+    "Run Stop Win %": "Share of run-defense reps where he beat his blocker.",
+    "QB Hits": "Hits on the quarterback as he threw.", "QBH": "Hits on the quarterback as he threw.",
+    # Defense
+    "Tkl": "Total tackles.", "Solo": "Solo tackles.", "Ast": "Assisted tackles.",
+    "TFL": "Tackles for loss.", "Sacks": "Sacks.", "FF": "Forced fumbles.", "FR": "Fumble recoveries.",
+    "PD": "Passes defended (broken up or intercepted).",
+    "Stops": "Tackles that ended a play as a failure for the offense (negative EPA).",
+    "Missed": "Missed tackles (charged when a whiff let the play go for a big gain).",
+    "Miss %": "Missed tackles as a share of tackle attempts (tackles plus misses).",
+    "ST Tkl": "Special-teams tackles.",
+    # Kicking and returns
+    "FGM": "Field goals made.", "FGA": "Field goals attempted.", "FG %": "Field goal percentage.",
+    "0-39": "Field goals made / attempted from under 40 yards.",
+    "40-49": "Field goals made / attempted from 40-49 yards.",
+    "50+": "Field goals made / attempted from 50+ yards.",
+    "XPM": "Extra points made.", "XPA": "Extra points attempted.",
+    "Punts": "Punts.", "Avg": "Average yards per carry, catch, punt or return.",
+    "In20": "Punts downed inside the opponent's 20.", "TB": "Touchbacks.",
+    "KR": "Kickoff returns.", "KR Yds": "Kickoff return yards.", "KR TD": "Kickoff return touchdowns.",
+    "PR": "Punt returns.", "PR Yds": "Punt return yards.", "PR TD": "Punt return touchdowns.",
+    # Grades, staff and front offices
+    "Grade": "Game grade, 0-100: how well he did his job compared with an average player at his position. "
+             "90+ elite, 70-79 above average, 60-69 average, under 50 poor.",
+    "Teaching": "How well this coach develops players.",
+    "Motivation": "How well this coach keeps players' morale and effort up.",
+    "Judge Ability": "How accurately this scout or coach rates a player's current ability.",
+    "Judge Potential": "How accurately this scout or coach projects a player's potential.",
+    "Plan": "The club's plan for this season (All-In, Contend, Rebuild, Tank and so on).",
+    "GM Style": "The general manager's personality, which shapes his trades, drafts and signings.",
+    "Owner patience": "How long the owner gives the front office before firing people.",
+    "Confidence": "The owner's confidence in the general manager, 0-100%.",
+    "QB pipe": "Talent pipeline: how strong the incoming generation of quarterbacks is in this league.",
+    "RB pipe": "Talent pipeline: how strong the incoming generation of running backs is in this league.",
+    "WR pipe": "Talent pipeline: how strong the incoming generation of receivers is in this league.",
+    "DB pipe": "Talent pipeline: how strong the incoming generation of defensive backs is in this league.",
+}
+
+
+def column_tip(label):
+    """Hover text for a table column header, or '' if there is none."""
+    if label in COLUMN_DESC:
+        return COLUMN_DESC[label]
+    from ratings import ATTRIBUTES
+    hits = [(name, ATTRIBUTE_DESC.get(k, "")) for k, (name, abbr, _g) in ATTRIBUTES.items() if abbr == label]
+    return "  /  ".join(f"{name}: {desc}" for name, desc in hits)
+
+
+# ── Settings (shown when hovering over a setting) ─────────────────────────────
+
+SETTING_DESC = {
+    "theme": "Dark or light colours.",
+    "accent": "The highlight colour used for buttons and headings.",
+    "font_size": "Base text size in points.",
+    "table_density": "Row height in tables.",
+    "show_ca_number": "Show ratings as numbers, or as tier names (Elite, Pro Bowl, Starter...).",
+    "show_pa_number": "Show your scouts' potential estimates.",
+    "show_archetype": "Show each player's archetype in tables.",
+    "show_hidden_stats": "Reveal hidden traits such as work rate and big-game temperament (normally only hinted at).",
+    "color_attributes": "Colour attribute values from poor (red) to elite (green).",
+    "highlight_player_team": "Highlight your club's rows in league tables.",
+    "home_field_advantage": "Whether playing at home helps at all.",
+    "home_field_strength": "How much home field helps. 1.0 is about the NFL's real edge.",
+    "game_randomness": "How much the better team's edge is diluted by luck on game day.",
+    "turnover_rate": "Scales interceptions and fumbles.",
+    "sack_rate": "Scales how often pressure ends in a sack.",
+    "big_play_rate": "Scales the chance of long runs and deep completions.",
+    "penalty_rate": "Scales how often flags are thrown.",
+    "fg_accuracy": "Scales every kicker's range and accuracy.",
+    "pat_distance": "Where the extra point is kicked from (33 yards in the NFL since 2015).",
+    "fourth_down_aggression": "How willing coaches are to go for it on fourth down. Coaches still drift with results.",
+    "weather": "Wind, rain, snow, heat and cold affect passing, kicking, fumbles and fatigue.",
+    "momentum": "How much big plays swing the next few plays.",
+    "streakiness": "How much players run hot and cold between games.",
+    "injury_rate": "Scales how often players get hurt.",
+    "injury_severity": "Scales how long injuries last.",
+    "pass_tendency": "Shifts every coach's pass/run balance. Above 1 means more passing.",
+    "pace": "Scales the number of plays per game.",
+    "completion_rate": "Scales completion percentage.",
+    "run_efficiency": "Scales yards per carry.",
+    "fatigue_rate": "How quickly players tire during a game.",
+    "fatigue_effect": "How much tiredness hurts performance.",
+    "playoff_teams": "Playoff teams from each conference.",
+    "overtime_rules": "Modern: both teams get a possession, then the next score wins (10-minute period in the regular season). Sudden death: the first score wins. Full period: the whole overtime period is played.",
+    "salary_cap": "The league's salary cap this season.",
+    "cap_growth": "How much the salary cap rises each season.",
+    "hard_cap": "Clubs can't go over the cap to sign or trade for players.",
+    "roster_size": "Active roster limit in the regular season.",
+    "trade_deadline_week": "No trades after this week of the regular season.",
+    "practice_squad_size": "Players each club can keep on the practice squad.",
+    "growth_rate": "How fast young players improve.",
+    "decline_rate": "How fast veterans decline.",
+    "breakout_rate": "How often players develop far faster than expected.",
+    "bust_rate": "How often promising players stall.",
+    "retirement_age_shift": "Players retire this many years later (positive) or earlier (negative).",
+    "draft_class_strength": "Overall talent of each draft class.",
+    "ai_trade_willingness": "How readily CPU clubs trade with each other and with you. Lower makes them demand more.",
+    "ai_fa_aggression": "How hard CPU clubs spend in free agency.",
+    "coach_hot_seat": "How quickly owners fire head coaches.",
+    "gm_hot_seat": "How quickly owners fire CPU general managers.",
+    "ai_personality_strength": "How different CPU front offices are. 0 makes them all alike.",
+    "holdout_rate": "How often underpaid stars hold out (normally 0-3 a season).",
+    "watch_games": "Open the live viewer for your games when you press Continue.",
+    "sim_stop_injury": "Multi-week sims stop when one of your starters is hurt for 3+ weeks.",
+    "sim_stop_offer": "Multi-week sims stop when a club makes you a trade offer.",
+    "watch_speed": "Speed of the live game viewer.",
+    "gm_can_be_fired": "Whether your owner can fire you.",
+    "auto_roster_moves": "Your staff handle injured reserve and the practice squad.",
+    "autosave": "Save automatically after each week.",
+    "autosave_slots": "How many autosaves to keep.",
+    "confirm_actions": "Ask before releasing or trading players.",
+}
+
+# Settings whose effect shows up in a league average: key -> (average, label, format, NFL reference)
+SETTING_READINGS = {
+    "turnover_rate": ("turnovers", "turnovers per team-game", "{:.2f}", "about 1.3"),
+    "sack_rate": ("sack_rate", "% of dropbacks end in a sack", "{:.1f}", "about 6.8"),
+    "penalty_rate": ("penalties", "accepted penalties per team-game", "{:.1f}", "about 6"),
+    "fg_accuracy": ("fg_pct", "% of field goals made", "{:.1f}", "about 85"),
+    "pass_tendency": ("pass_rate", "% of plays are dropbacks", "{:.1f}", "about 59"),
+    "pace": ("plays", "plays per team-game", "{:.1f}", "about 63"),
+    "completion_rate": ("comp_pct", "% completions", "{:.1f}", "about 64"),
+    "run_efficiency": ("ypc", "yards per carry", "{:.2f}", "about 4.3"),
+    "big_play_rate": ("ypa", "yards per pass attempt", "{:.2f}", "about 7.0"),
+    "pat_distance": ("xp_pct", "% of extra points made", "{:.1f}", "about 95"),
+    "home_field_strength": ("home_win", "% of games won by the home team", "{:.1f}", "about 55"),
+    "injury_rate": ("injuries", "injuries per team-game", "{:.2f}", None),
+    "fourth_down_aggression": ("fourth_att", "4th-down attempts per team-game", "{:.2f}", "about 1.6"),
+}
+
+
+def league_readings(lg):
+    """League averages behind SETTING_READINGS: this regular season once 4+ weeks are played,
+    otherwise last season's. Returns (averages dict, 'this season' / 'last season' / '')."""
+    from eras import season_averages
+    games = [g for w in sorted(lg.results) for g in lg.results[w]] if getattr(lg, "results", None) else []
+    if len(games) >= 4 * max(1, len(lg.teams) // 2):
+        avg = dict(season_averages(games))
+        n = 2 * len(games)
+        xpa = sum(line.get("xpa", 0) for g in games for line in g.player_stats.values())
+        xpm = sum(line.get("xpm", 0) for g in games for line in g.player_stats.values())
+        if xpa:
+            avg["xp_pct"] = 100.0 * xpm / xpa
+        avg["home_win"] = 100.0 * sum(1 for g in games if g.home_score > g.away_score) / len(games)
+        avg["injuries"] = sum(len(g.injuries) for g in games) / n
+        avg["fourth_att"] = sum(g.team_stats[a]["fourth_att"] for g in games for a in (g.home, g.away)) / n
+        return avg, "this season"
+    if lg.history and lg.history[-1].get("averages"):
+        return dict(lg.history[-1]["averages"]), "last season"
+    return {}, ""
+
+
+def setting_reading(key, avgs, when):
+    """One line showing how a slider's effect looks in this league, or ''."""
+    spec = SETTING_READINGS.get(key)
+    if not spec or spec[0] not in avgs:
+        return ""
+    stat, label, fmt, nfl = spec
+    sep = "" if label.startswith("%") else " "
+    out = f"{when.capitalize()}: {fmt.format(avgs[stat])}{sep}{label}"
+    return out + (f" (NFL {nfl})" if nfl else "")

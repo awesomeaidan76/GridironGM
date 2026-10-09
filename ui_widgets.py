@@ -224,6 +224,7 @@ class DataTable(QTableWidget):
         self.setSortingEnabled(False)
         self.clearContents()
         self.setRowCount(len(rows))
+        self._header_tips()
         bold = QFont()
         bold.setBold(True)
         for r, row in enumerate(rows):
@@ -259,6 +260,16 @@ class DataTable(QTableWidget):
                 hh.setSortIndicator(-1, Qt.SortOrder.AscendingOrder)
                 self.setSortingEnabled(True)
             self._internal = False
+
+    def _header_tips(self):
+        """Glossary text on hover for every column header the glossary explains."""
+        from glossary import column_tip
+        for c in range(self.columnCount()):
+            it = self.horizontalHeaderItem(c)
+            if it is not None:
+                tip = column_tip(it.text())
+                if tip and it.toolTip() != tip:
+                    it.setToolTip(tip)
 
     def key_at(self, row):
         item = self.item(row, 0)

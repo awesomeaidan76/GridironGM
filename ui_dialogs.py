@@ -15,6 +15,7 @@ from contracts import market_value, asking_salary, contract_length
 from player import ARCHETYPES
 from ratings import (ATTRIBUTES, ATTRIBUTE_GROUPS, POSITION_DISPLAY_GROUPS, POSITIONS,
                      HIDDEN_TRAITS, POSITION_NAMES, stars_text, ca_tier, unit_ovr)
+from glossary import SETTING_DESC, league_readings, setting_reading
 from settings import settings, SPEC, GROUPS as SETTING_GROUPS
 from coach import COACH_RATINGS, COACH_RATING_LABELS
 from stats import merge, summary_line
@@ -852,8 +853,9 @@ class TeamDialog(BaseDialog):
 
 class SettingsDialog(BaseDialog):
     def __init__(self, main):
-        super().__init__(main, "Settings", 760, 640)
+        super().__init__(main, "Settings", 1000, 680)
         self.controls = {}
+        self.tips = {}
         self.root.addWidget(h_label("Settings", "h1"))
         note = QLabel("Match Engine, League, Development and AI settings belong to this league and are "
                       "saved with it (your other leagues keep their own). They apply from the next game "
@@ -862,6 +864,7 @@ class SettingsDialog(BaseDialog):
         note.setObjectName("sub")
         note.setWordWrap(True)
         self.root.addWidget(note)
+        self.readings, self.readings_when = league_readings(main.lg)
         tabs = QTabWidget()
         for group in SETTING_GROUPS:
             page = QWidget()
@@ -871,7 +874,17 @@ class SettingsDialog(BaseDialog):
             for key, (default, g, label, kind, extra) in SPEC.items():
                 if g != group:
                     continue
-                form.addRow(label + ":", self._control(key, kind, extra))
+                ctrl = self._control(key, kind, extra)
+                tip = SETTING_DESC.get(key, "")
+                reading = setting_reading(key, self.readings, self.readings_when)
+                if reading:
+                    tip = f"{tip}\n{reading}" if tip else reading
+                lab = QLabel(label + ":")
+                self.tips[key] = tip
+                if tip:
+                    lab.setToolTip(tip)
+                    ctrl.setToolTip(tip)
+                form.addRow(lab, ctrl)
             reset = QPushButton(f"Reset {group} to defaults")
             reset.setObjectName("ghost")
             reset.clicked.connect(lambda _c=False, grp=group: self._reset(grp))
@@ -933,6 +946,15 @@ class SettingsDialog(BaseDialog):
         show(slider.value())
         lay.addWidget(slider, 1)
         lay.addWidget(lab)
+        if SPEC[key][1] == "Match Engine":
+            # What the setting currently produces in this league, next to the slider
+            # (a fixed-width column so every slider in the tab lines up)
+            reading = setting_reading(key, self.readings, self.readings_when)
+            avg = QLabel(reading.split(": ", 1)[1] if reading else "")
+            avg.setObjectName("muted")
+            avg.setFixedWidth(340)
+            avg.setToolTip(reading)
+            lay.addWidget(avg)
         self.controls[key] = ("slider", slider, lo, step, kind)
         return box
 
