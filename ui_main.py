@@ -18,8 +18,8 @@ from settings import settings
 from ui_dialogs import LoadDialog, PlayerDialog, SettingsDialog, TeamDialog
 from ui_live import LiveGameDialog, has_live_data
 import inbox
-from ui_screens_club import (DepthChartScreen, FinancesScreen, HomeScreen, InboxScreen, RosterScreen,
-                             StaffScreen, TacticsScreen, GamePlanScreen)
+from ui_screens_club import (CapPlannerScreen, DepthChartScreen, FinancesScreen, HomeScreen, InboxScreen,
+                             RosterScreen, StaffScreen, TacticsScreen, GamePlanScreen)
 from ui_screens_league import (GameCenterScreen, HistoryScreen, NewsScreen, PlayersScreen,
                                PlayoffsScreen, ScheduleScreen, StandingsScreen, StatsScreen,
                                TeamsScreen, GlossaryScreen)
@@ -30,7 +30,7 @@ from ui_widgets import TeamBadge, confirm, info
 NAV = [
     ("MY CLUB", [("home", "Home"), ("inbox", "Inbox"), ("roster", "Roster"), ("depth", "Depth Chart"),
                  ("tactics", "Tactics"), ("gameplan", "Game Plan"), ("staff", "Staff"),
-                 ("finances", "Finances")]),
+                 ("finances", "Finances"), ("capplan", "Cap Planner")]),
     ("LEAGUE", [("schedule", "Schedule"), ("game", "Game Center"), ("standings", "Standings"),
                 ("stats", "Stats"), ("players", "Players"), ("teams", "Teams"),
                 ("playoffs", "Playoffs"), ("history", "History"), ("news", "News"),
@@ -42,6 +42,7 @@ NAV = [
 SCREENS = {
     "home": HomeScreen, "inbox": InboxScreen, "roster": RosterScreen, "depth": DepthChartScreen,
     "tactics": TacticsScreen, "gameplan": GamePlanScreen, "staff": StaffScreen, "finances": FinancesScreen,
+    "capplan": CapPlannerScreen,
     "schedule": ScheduleScreen, "game": GameCenterScreen, "standings": StandingsScreen,
     "stats": StatsScreen, "players": PlayersScreen, "teams": TeamsScreen,
     "playoffs": PlayoffsScreen, "history": HistoryScreen, "news": NewsScreen,
