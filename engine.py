@@ -392,7 +392,7 @@ class GameSim:
         if p is None:
             return
         self._slot_now[p.id] = slot
-        if slot == p.position:
+        if slot == p.position and not p.converted_from:
             if p.id in self._adj:
                 del self._adj[p.id]
             return
@@ -544,7 +544,7 @@ class GameSim:
                 on.add(p.id)
                 slot = slots[i] if slots is not None and i < len(slots) else p.position
                 self._at(p, slot)
-                if slot != p.position:
+                if slot != p.position or p.converted_from:
                     ss = self.res.slot_snaps.setdefault(p.id, {})
                     ss[slot] = ss.get(slot, 0) + 1
                     f = self._fam.get((p.id, slot), 100.0)

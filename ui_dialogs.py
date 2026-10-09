@@ -10,8 +10,9 @@ from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFor
                              QScrollArea, QSlider, QSpinBox, QTabWidget, QVBoxLayout, QWidget)
 
 import free_agency as fa
+import position_fit as fit
 import save_manager
-from contracts import market_value, asking_salary, contract_length
+from contracts import market_value, asking_salary, contract_length, POSITION_MAX_SHARE
 from player import ARCHETYPES
 from ratings import (ATTRIBUTES, ATTRIBUTE_GROUPS, POSITION_DISPLAY_GROUPS, POSITIONS,
                      HIDDEN_TRAITS, POSITION_NAMES, stars_text, ca_tier, unit_ovr)
@@ -94,6 +95,8 @@ class PlayerDialog(BaseDialog):
         chips.setSpacing(6)
         chips.addWidget(Chip(personality(p)))
         chips.addWidget(Chip(p.development_stage()))
+        if p.converted_from:
+            chips.addWidget(Chip(fit.conversion_status(p), T("warn")))
         if p.years_to_peak() > 0 and p.dev_profile() != "Normal":
             chips.addWidget(Chip("Raw — hard to project" if p.dev_profile() == "Raw"
                                  else "Polished — easier to project"))
@@ -166,6 +169,7 @@ class PlayerDialog(BaseDialog):
         tabs.addTab(self._stats_tab(), "Career Stats")
         tabs.addTab(self._log_tab(), "Game Log")
         tabs.addTab(self._history_tab(), "Development & History")
+        tabs.addTab(self._positions_tab(), "Positions")
         self.root.addWidget(tabs, 1)
 
         # Actions
@@ -189,6 +193,11 @@ class PlayerDialog(BaseDialog):
                 b = QPushButton("Extend Contract…")
                 b.clicked.connect(self._extend)
                 row.addWidget(b)
+            b = QPushButton("Change Position…")
+            b.setToolTip("Move him to a new position for good. He keeps learning it, and his contract "
+                         "value follows it.")
+            b.clicked.connect(lambda: self._change_position())
+            row.addWidget(b)
             b = QPushButton("Release")
             b.setObjectName("danger")
             b.clicked.connect(self._release)
@@ -425,6 +434,89 @@ class PlayerDialog(BaseDialog):
         lay.addLayout(right, 2)
         return w
 
+    def _positions_tab(self):
+        """The staff's view of him at other positions, his position history and second-position training."""
+        p = self.p
+        lg = self.lg
+        mine = p.team == lg.user_abbr and not p.retired
+        staff_team = self.user
+        w = QWidget()
+        lay = QHBoxLayout(w)
+        lay.setContentsMargins(0, 8, 0, 0)
+        rep = Card("Staff Position Report" if mine else "Your Staff's View")
+        rows = fit.staff_report(p, staff_team, lg.year, n=6)
+        table = DataTable(["Position", "Today", "Once Learned", "Potential", "Knows It", "Weeks", "Size",
+                           "Staff View"], stretch=7, sortable=False)
+        trs = []
+        for r in rows:
+            weeks = "—" if r["familiarity"] >= 90 else str(r["weeks"])
+            trs.append([cell(f"{r['slot']} · {POSITION_NAMES[r['slot']]}"), ovr_cell(r["now"]),
+                        ovr_cell(r["learned"]), ovr_cell(r["pot"]),
+                        cell(f"{r['label']} {r['familiarity']:.0f}", r["familiarity"]),
+                        cell(weeks, r["weeks"]), cell(r["size"] or "Fine", tip=r["size"] or None),
+                        cell(r["verdict"])])
+        table.set_rows(trs, [r["slot"] for r in rows])
+        if mine:
+            table.on_activate = lambda slot: self._change_position(slot)
+        rep.add(table, 1)
+        acc = min((r["accuracy"] for r in rows), default=10)
+        read = "sharp." if acc >= 15 else "reasonable." if acc >= 10 else "rough — take it with a grain of salt."
+        note = QLabel("Their best guesses at the positions he could play, with what carries over from his own. "
+                      + ("Double-click a position to move him there. " if mine else "")
+                      + "Your position coaches' read is " + read)
+        note.setObjectName("muted")
+        note.setWordWrap(True)
+        rep.add(note)
+        lay.addWidget(rep, 3)
+
+        side = Card("Position")
+        side.add(QLabel(f"Listed at <b>{POSITION_NAMES[p.position]}</b>: {p.ovr} OVR"))
+        if p.converted_from:
+            st = QLabel(fit.conversion_status(p))
+            st.setWordWrap(True)
+            st.setStyleSheet(f"color: {T('warn')};")
+            side.add(st)
+            lab = QLabel("He is still being judged with a penalty at his new position until he has learned "
+                         "it (and is the right size for it). His old position stays familiar.")
+            lab.setObjectName("muted")
+            lab.setWordWrap(True)
+            side.add(lab)
+        for yr, old, new in (p.position_history or [])[-6:][::-1]:
+            side.add(QLabel(f"{yr or '—'}  ·  moved from {old} to {new}"))
+        if mine:
+            side.body.addSpacing(6)
+            side.add(QLabel("Second position in practice:"))
+            combo = QComboBox()
+            combo.addItem("None", None)
+            for s in POSITIONS:
+                if s != p.position:
+                    combo.addItem(f"{s} · {POSITION_NAMES[s]}", s)
+            combo.setCurrentIndex(max(0, combo.findData(p.train_pos)) if p.train_pos else 0)
+            combo.setToolTip("He takes extra reps at this position in practice, so he learns it even when he is "
+                             "not on its depth chart, and part of his offseason growth goes into its skills. "
+                             "It costs him a little development at his own position.")
+
+            def set_train(_i, cb=combo, player=p):
+                player.train_pos = cb.currentData()
+            combo.currentIndexChanged.connect(set_train)
+            self.train_combo = combo
+            side.add(combo)
+            if p.train_pos:
+                f = fit.familiarity(p, p.train_pos)
+                side.add(QLabel(f"Knows {p.train_pos}: {fit.familiarity_label(f)} {f:.0f}/100"))
+            b = QPushButton("Change Position…")
+            b.clicked.connect(lambda: self._change_position())
+            side.add(b)
+        side.body.addStretch(1)
+        lay.addWidget(side, 2)
+        return w
+
+    def _change_position(self, slot=None):
+        dlg = PositionChangeDialog(self.main, self.p, slot)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.main.refresh_all()
+            self.build()
+
     # Actions
     def _release(self):
         p = self.p
@@ -450,6 +542,105 @@ class PlayerDialog(BaseDialog):
     def _trade(self):
         self.accept()
         self.main.trade_for(self.p)
+
+
+# ── Permanent position change ─────────────────────────────────────────────────
+
+class PositionChangeDialog(BaseDialog):
+    """Move one of your players to a new position for good, with the staff's view and his reaction."""
+
+    def __init__(self, main, player, slot=None):
+        super().__init__(main, f"Change Position — {player.name}", 620, 470)
+        self.p = player
+        self.lg = main.lg
+        self.team = self.lg.teams.get(player.team) if player.team else None
+        p = player
+        title = QLabel(f"{p.name} · {POSITION_NAMES[p.position]} · {p.ovr} OVR · Age {p.age}")
+        title.setObjectName("h2")
+        self.root.addWidget(title)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Move him to:"))
+        self.combo = QComboBox()
+        report = {r["slot"]: r for r in fit.staff_report(p, self.team, self.lg.year,
+                                                          slots=[s for s in POSITIONS if s != p.position])}
+        self.report = report
+        for s in POSITIONS:
+            if s == p.position:
+                continue
+            r = report[s]
+            self.combo.addItem(f"{s} · {POSITION_NAMES[s]}  ({r['learned']} once learned, "
+                               f"{r['verdict'].lower()})", s)
+        if slot is None:
+            slot = max(report, key=lambda k: report[k]["learned"]) if report else None
+        self.combo.setCurrentIndex(max(0, self.combo.findData(slot)))
+        self.combo.currentIndexChanged.connect(lambda _i: self._update())
+        row.addWidget(self.combo, 1)
+        self.root.addLayout(row)
+        self.detail = QLabel()
+        self.detail.setTextFormat(Qt.TextFormat.RichText)
+        self.detail.setWordWrap(True)
+        self.root.addWidget(self.detail, 1)
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        cancel = QPushButton("Cancel")
+        cancel.clicked.connect(self.reject)
+        btns.addWidget(cancel)
+        self.ok = QPushButton("Move Him")
+        self.ok.setObjectName("primary")
+        self.ok.clicked.connect(self._apply)
+        btns.addWidget(self.ok)
+        self.root.addLayout(btns)
+        self._update()
+
+    def slot(self):
+        return self.combo.currentData()
+
+    def _update(self):
+        p, slot = self.p, self.slot()
+        if slot is None:
+            return
+        r = self.report[slot]
+        lines = [f"<b>At {POSITION_NAMES[slot].lower()} today:</b> {r['now']}  ·  <b>once learned:</b> "
+                 f"{r['learned']}  ·  <b>potential there:</b> {r['pot']}"]
+        if slot == p.converted_from:
+            lines.append(f"This is the position he came from: he goes back to being a natural {slot}.")
+        elif r["familiarity"] >= 90:
+            lines.append(f"He already knows the position ({r['label'].lower()}, {r['familiarity']:.0f}/100).")
+        else:
+            lines.append(f"He knows it {r['label'].lower()} ({r['familiarity']:.0f}/100): about {r['weeks']} weeks "
+                         "of practice and game reps to learn it, faster with good position coaches. "
+                         "Training camp counts.")
+        if r["size"] and slot != p.converted_from:
+            goal = r["weight"]
+            more = (f" A conditioning program would take him to about {goal} lb over the next offseasons"
+                    + (", costing a little speed and quickness." if goal > p.weight else
+                       ", costing a little strength but adding some quickness." if goal < p.weight else "."))
+            lines.append(f"He is {r['size']}.{more if goal != p.weight else ''}")
+        lines.append(f"<b>Staff view:</b> {r['verdict']}.")
+        pay = POSITION_MAX_SHARE.get(slot, 0.06) / POSITION_MAX_SHARE.get(p.position, 0.06)
+        word = "more than" if pay > 1.08 else "less than" if pay < 0.92 else "about the same as"
+        lines.append(f"His contract value follows his listed position: {POSITION_NAMES[slot].lower()}s are paid "
+                     f"{word} {POSITION_NAMES[p.position].lower()}s.")
+        team = self.team
+        from position_fit import STARTERS
+        before = team is not None and p in team.depth(p.position)[:STARTERS.get(p.position, 1)]
+        after = fit.would_start(team, p, slot)
+        d, reaction = fit.move_mood(p, slot, before, after)
+        role = "would start there once he has learned it" if after else "would be a backup there"
+        lines.append(f"He {role}. He would be <b>{reaction}</b> ({d:+d} morale).")
+        self.detail.setText("<br><br>".join(lines))
+        self.ok.setText(f"Move Him to {slot}")
+
+    def _apply(self):
+        p, slot = self.p, self.slot()
+        if slot is None or self.team is None:
+            return
+        old = p.position
+        d, word = fit.change_position(self.lg, self.team, p, slot)
+        if word:
+            self.lg.add_news("Position Change", f"The {self.team.name} moved {old} {p.name} to "
+                                                f"{POSITION_NAMES[slot].lower()}. He is {word}.", self.team.abbr)
+        self.accept()
 
 
 # ── Contract offers ───────────────────────────────────────────────────────────

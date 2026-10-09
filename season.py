@@ -79,6 +79,11 @@ def start_new_season(lg, first=False):
                     _development_news(lg, p, team, old, new, note)
                 _offseason_heal(p)
                 fit.offseason_decay(p, last)
+                gained = fit.offseason_conditioning(p)
+                if gained and team.abbr == lg.user_abbr:
+                    lg.add_news("Development", f"{p.name} {'added' if gained > 0 else 'dropped'} "
+                                               f"{abs(gained)} lb this offseason for his move to "
+                                               f"{p.position} (now {p.weight} lb).", team.abbr)
         for p in lg.free_agents:
             p.age += 1
             develop(p, None, last_season=last)
@@ -86,6 +91,8 @@ def start_new_season(lg, first=False):
             fit.offseason_decay(p, last)
         for c in [t.coach for t in lg.teams.values()] + lg.coach_pool:
             c.age += 1
+        # CPU staffs move players to new positions before camp
+        fo.offseason_conversions(lg)
         # AI rosters must be legal
         for team in lg.teams.values():
             if team.abbr == lg.user_abbr:
@@ -141,6 +148,9 @@ def start_new_season(lg, first=False):
     staff_mod.ensure_league(lg)
     fo.ensure(lg)
     fo.weekly_depth_all(lg, news=not first)
+    if not first:
+        for team in lg.teams.values():
+            fit.training_camp(team, lg.year)
     staff_mod.set_expectation(lg)
     # Next spring's draft class plays its college season now; scouts watch it all year
     draft_mod.generate_class(lg)
@@ -255,6 +265,7 @@ def _post_week(lg, results):
             lost = res.winner is not None and not won
             team = lg.teams[abbr]
             starters = res.starters
+            away = getattr(res, "slot_snaps", None) or {}
             for p in team.roster:
                 d = (2 if won else -2 if lost else 0)
                 if p.id in starters:
@@ -263,6 +274,9 @@ def _post_week(lg, results):
                     d -= 2          # good player not playing
                 temper = p.hidden.get("temperament", 50)
                 d *= 1.3 - temper / 100.0 * 0.6
+                elsewhere = away.get(p.id)
+                if elsewhere and sum(n for s, n in elsewhere.items() if s != p.position) >= 10:
+                    d += fit.snaps_mood(p)          # how he feels about playing out of position
                 p.morale = int(max(1, min(100, p.morale + d + (65 - p.morale) * 0.05)))
 
     _position_learning(lg, results)

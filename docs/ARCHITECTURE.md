@@ -114,6 +114,74 @@ least 7). One move per slot, one slot per player; news on each new move.
 Injury cover on game day stays in `Team.lineup` (`FALLBACK` positions, then
 the whole roster, by rating at the slot).
 
+**Two-way roles** (`front_office._two_way`, in the same weekly pass, stored in
+`Team.cpu_role` {slot: [player id, place]}): at most one per club. A healthy
+starter with stamina 70+, OVR 85+ or reputation 70+, not a QB, K, P or lineman,
+who rates 78+ OVR at one of `TWO_WAY_SLOTS`, is no more than `TWO_WAY_NEAR` (2)
+CA below that slot's weakest starter and at least `two_way_margin` (12, minus
+up to 4 for reputation, minus 0.4 per point of coach adaptability over 10, at
+least 3; 3 less to keep last week's role) above its first backup, is listed at
+that place (`STARTERS[slot]`, the first backup) by `Team.full_depth`. Moves
+whose starting familiarity is 50+ (corner and safety, edge and linebacker) are
+left to game-day cover.
+
+**Permanent position changes** (`position_fit.move`, `change_position` for a
+club's move: morale, depth lists, transaction). The new slot becomes
+`p.position`; `p.converted_from` holds the position he came up at
+(`home(p)`), `p.base_weight` his weight at the move and `p.position_history`
+[(year, old, new)] every move. `natural(p, slot)` is true only at a position
+he isn't converting to, so while converting `p.ca` (`converted_ca`) is the
+slot formula plus `slot_deltas` at his listed position: OVR, contract value
+(Q20a) and development all follow the new position, with the penalty.
+`Player.recalc` rebuilds it; `development._apply_ca_change` shifts its targets
+by the same offset. `p.pa` is reset to `slot_pot_ca` at the move; a converting
+veteran's POT is his conditioned, learned rating there. Moving back to
+`converted_from` clears the conversion. A converting player gets at least
+`TRAIN_REPS` (0.6) practice reps a week at his listed position, training
+camp (`training_camp`, `CAMP_WEEKS` = 3 weeks of reps at season start) counts,
+and `coaching_mult` (0.85 + position-coach development/20 × 0.3) scales all
+learning. Each offseason `offseason_conditioning` moves his weight toward
+`target_weight` (the slot's range, at most `CONDITION_MAX` = 25 lb from
+`base_weight`, 14/10/6 lb a year by age): each lb gained costs 0.08 speed and
+acceleration and 0.06 agility and adds 0.08 strength; each lb lost costs 0.08
+strength and adds 0.04 acceleration and agility. `settle` makes him a natural
+once familiarity is `SETTLED` (99.5) and his size gap is at most `SETTLE_SIZE`
+(0.25 sd); his old position keeps its familiarity.
+
+**Second position** (`p.train_pos`, user only): `weekly_learning` gives at
+least `TRAIN_REPS` there, and when he grows `development._weights_for_change`
+also spreads points over that slot's skills his own position doesn't use (35%
+of the slot's weights; athletic attributes excluded). Those points don't count
+toward his CA change; the development factor `second_position` (× 0.93) is the
+cost.
+
+**CPU conversions** (`front_office.offseason_conversions`, each offseason before
+camp, seeded per club and year): `conversion_options` lists "start" moves
+(projected learned and conditioned CA at the slot beats its weakest starter by
+`convert_margin`: 15, minus 0.4 per point of coach adaptability and 0.2 of
+development over 10, minus up to 3 for a risk-taking GM, at least 5, and the
+gain × position value beats what the club loses at his old spot) and "depth"
+moves (a backup who projects 0.6 × margin better there and at least as good as
+its first backup). Skipped: QB, K, P, practice squad, IR, holdouts, players
+already converting or moved in the last `CONVERT_COOLDOWN` (2) seasons, moves
+that break the roster minimum, unrelated moves (starting familiarity under 15)
+after 24, and starters the club would only start back at their old spot
+(`oop_margin`). Each option passes with 25% + 3% per point of coach
+adaptability over 10 (10-70%), at most `MAX_CONVERSIONS` (2) a club and one per
+destination. News ("Position Change") with his reaction.
+
+**Morale** (`move_mood`): ±(adaptability − 50)/12, minus up to 8 × (0.5 +
+ambition) for a move to a position with a lower `contracts.POSITION_MAX_SHARE`
+(a little plus for a higher one), +4 for becoming a starter, −5 for losing a
+start, minus (reputation − 60)/10 for a star moved off his spot, × (1.3 − 0.6
+× temperament), clamped −12..+8. Weekly, a player with 10+ snaps away from his
+listed position gets `snaps_mood` (adaptability helps, ambitious stars mind).
+
+**Staff Position Report** (`staff_report`): per slot today, learned
+(conditioned), slot POT, familiarity, weeks to learn, size note and a verdict,
+each rating with a fixed-per-season error of max(0.5, (20 − position coach
+development)/20 × 5).
+
 ## 3. A game: `engine.GameSim`
 
 1. **Setup.**
@@ -251,8 +319,10 @@ weekly, in `_post_week` (plus single-game records after every game):
 - news is written;
 - scouts learn about prospects;
 - the owner's confidence moves;
-- players learn the slots they are listed at away from their own position (`position_fit.weekly_learning`);
-- CPU staffs review out-of-position starters (`front_office.weekly_depth`);
+- players learn the slots they are listed at away from their own position, converting players their new
+  position and anyone training a second position (`position_fit.weekly_learning`);
+- morale reacts a little to snaps away from his position (`position_fit.snaps_mood`);
+- CPU staffs review out-of-position starters and two-way roles (`front_office.weekly_depth`);
 - AI teams manage IR and the practice squad and sign depth;
 - AI teams trade with each other;
 - holdouts settle, report or drag on;

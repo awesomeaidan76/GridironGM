@@ -807,11 +807,195 @@ def weekly_depth(lg, team, news=True):
             lg.add_news("Depth Chart", f"The {team.name} are starting {p.position} {p.name} at {slot}: "
                                        f"he rates {p.ovr_at(slot)} there, ahead of {weakest.name} "
                                        f"({weakest.ovr_at(slot)}).", team.abbr)
+    # A multi-role star also gets a part-time role at a second slot
+    old_role = team.cpu_role or {}
+    team.cpu_role = {}
+    pick = _two_way(team, taken, old_role)
+    if pick is not None:
+        p, slot, idx, backup = pick
+        team.cpu_role[slot] = [p.id, idx]
+        if news and (old_role.get(slot) or [None])[0] != p.id:
+            behind = f", ahead of {backup.name} ({backup.ovr_at(slot)})" if backup is not None else ""
+            lg.add_news("Depth Chart", f"The {team.name} will also use {p.position} {p.name} at {slot}: "
+                                       f"he rates {p.ovr_at(slot)} there{behind}.", team.abbr)
 
 
 def weekly_depth_all(lg, news=True):
     for t in lg.teams.values():
         weekly_depth(lg, t, news)
+
+
+# ── Two-way and multi-role players ────────────────────────────────────────────
+# A star who starts at his own position, is about as good as the starters at a
+# second slot and clearly better than its first backup gets that backup role too
+# (a receiver who takes handoffs, a corner who plays some receiver, a linebacker
+# at tight end on short yardage). He plays one slot per snap and his fatigue
+# counts both. Only stars with the stamina for it qualify; adaptable coaches try
+# it sooner. Closely related moves (corner and safety, edge and linebacker) are
+# left to game-day injury cover.
+
+TWO_WAY_MARGIN = 12.0         # CA points better than the slot's first backup
+TWO_WAY_NEAR = 2.0            # ...and no more than this below its weakest starter
+TWO_WAY_SLOTS = ("RB", "WR", "TE", "LB", "CB", "S")
+TWO_WAY_STAMINA = 70
+TWO_WAY_OVR = 85              # a Pro Bowl level player...
+TWO_WAY_REP = 70              # ...or a big name
+TWO_WAY_SLOT_OVR = 78         # who would be a good starter at the second slot
+TWO_WAY_RELATED = 50          # starting familiarity at which a move counts as closely related
+
+
+def two_way_margin(team, p):
+    m = TWO_WAY_MARGIN
+    if p.reputation > 50:
+        m -= (p.reputation - 50) / 50.0 * 4.0
+    m -= (team.coach.r("adaptability") - 10) * 0.4
+    return max(3.0, m)
+
+
+def _two_way(team, taken, old_role):
+    from position_fit import STARTERS, start_familiarity
+    from ratings import ovr_from_ca
+    starters = team.starter_ids()
+    keep = {v[0]: s for s, v in old_role.items()}
+    best = None
+    for p in team.roster:
+        if p.id not in starters or p.id in taken or p.ps or p.ir or p.holdout or p.is_injured:
+            continue
+        if p.position in ("QB", "K", "P", "OT", "IOL", "DT") or p.attrs.get("stamina", 60) < TWO_WAY_STAMINA:
+            continue
+        if p.ovr < TWO_WAY_OVR and p.reputation < TWO_WAY_REP:
+            continue
+        for slot in TWO_WAY_SLOTS:
+            if slot == p.position or start_familiarity(p.position, slot) >= TWO_WAY_RELATED:
+                continue
+            n = STARTERS[slot]
+            order = [q for q in team.depth(slot) if q.id != p.id]
+            v = p.rating_at(slot)
+            if ovr_from_ca(v, slot) < TWO_WAY_SLOT_OVR or len(order) < n:
+                continue
+            if v < min(q.rating_at(slot) for q in order[:n]) - TWO_WAY_NEAR:
+                continue
+            backup = order[n] if len(order) > n else None
+            gain = v - (backup.rating_at(slot) if backup is not None else 0)
+            m = two_way_margin(team, p)
+            if keep.get(p.id) == slot:
+                m -= 3.0                        # the staff stick with a role that is working
+            if gain >= m and (best is None or gain - m > best[0]):
+                best = (gain - m, p, slot, n, backup)
+    return None if best is None else best[1:]
+
+
+# ── Permanent position changes ────────────────────────────────────────────────
+# Each offseason a staff may move a player to a new position for good: a corner
+# who has lost a step to safety, a tackle inside to guard, a big receiver to
+# tight end, a depth player to where he is better. They judge him on what he
+# should be there once he has learned it (and built up or slimmed down for it),
+# against what the team loses where he was. Adaptable coaches and teachers, and
+# risk-taking GMs, do it more readily. The player's reaction depends on his
+# personality (position_fit.move_mood).
+
+CONVERT_MARGIN = 15.0
+CONVERT_SLOTS = OOP_SLOTS
+MAX_CONVERSIONS = 2
+CONVERT_COOLDOWN = 2          # seasons before a staff will move the same player again
+# Moves to a position that asks less of his legs: the usual way to extend a veteran's career
+AGE_MOVES = {("CB", "S"), ("CB", "LB"), ("S", "LB"), ("EDGE", "LB"), ("EDGE", "DT"), ("LB", "DT"),
+             ("WR", "TE"), ("RB", "FB"), ("RB", "TE"), ("TE", "FB"), ("OT", "IOL")}
+
+
+def convert_margin(team):
+    """CA points a conversion must add where he goes before this staff makes it."""
+    m = CONVERT_MARGIN
+    m -= (team.coach.r("adaptability") - 10) * 0.4
+    m -= (team.coach.r("development") - 10) * 0.2
+    g = gm_of(team)
+    if g is not None:
+        m -= (g.t("risk") - 0.5) * 6.0
+    return max(5.0, m)
+
+
+def conversion_options(lg, team):
+    """[(score, player, slot, why, projected CA, the man he passes or None)] best first."""
+    from position_fit import STARTERS, learned_ca, start_familiarity
+    from ratings import ROSTER_MINIMUM
+    counts = team.position_counts()
+    depth = {s: team.depth(s) for s in CONVERT_SLOTS}
+    m = convert_margin(team)
+    out = []
+    for p in team.roster:
+        if p.ps or p.ir or p.holdout or p.position not in CONVERT_SLOTS or p.converted_from:
+            continue
+        hist = p.position_history or []
+        if hist and hist[-1][0] is not None and lg.year - hist[-1][0] < CONVERT_COOLDOWN:
+            continue
+        if counts[p.position] - 1 < ROSTER_MINIMUM[p.position]:
+            continue
+        own = depth[p.position]
+        n_own = STARTERS[p.position]
+        rank = own.index(p) if p in own else len(own)
+        cost = 0.0
+        if rank < n_own:
+            nxt = own[n_own] if len(own) > n_own else None
+            cost = p.ca - (nxt.ca if nxt is not None else 40)
+            if cost >= oop_margin(team, p):
+                continue                        # he would only be started back there out of position
+        pv_own = position_value(lg, team, p.position)
+        for slot in CONVERT_SLOTS:
+            if slot == p.position or (start_familiarity(p.position, slot) < 15 and p.age > 24):
+                continue
+            fut = learned_ca(p, slot, conditioned=True)
+            dest = depth[slot]
+            n = STARTERS[slot]
+            starters = dest[:n]
+            weakest = min(starters, key=lambda q: q.rating_at(slot)) if len(starters) >= n else None
+            gain = fut - (weakest.rating_at(slot) if weakest is not None else 0)
+            pv = position_value(lg, team, slot)
+            if gain >= m and gain * pv > cost * pv_own:
+                out.append((gain * pv - cost * pv_own, p, slot, "start", fut, weakest))
+            elif rank >= n_own and fut >= p.ca + m * 0.6:
+                first_backup = dest[n].rating_at(slot) if len(dest) > n else 0
+                if fut >= first_backup:
+                    out.append(((fut - p.ca) * pv * 0.5, p, slot, "depth", fut, None))
+    out.sort(key=lambda x: -x[0])
+    return out
+
+
+def offseason_conversions(lg):
+    """CPU staffs' permanent position changes for the coming season, with news."""
+    from position_fit import change_position
+    from ratings import POSITION_NAMES, ovr_from_ca
+    for team in lg.teams.values():
+        if team.abbr == lg.user_abbr:
+            continue
+        rng = random.Random(zlib.crc32(f"convert:{team.abbr}:{lg.year}".encode()))
+        chance = max(0.10, min(0.7, 0.25 + (team.coach.r("adaptability") - 10) * 0.03))
+        done, slots = set(), set()
+        for _, p, slot, why, fut, weakest in conversion_options(lg, team):
+            if len(done) >= MAX_CONVERSIONS:
+                break
+            if p.id in done or slot in slots or rng.random() > chance:
+                continue
+            old = p.position
+            age = p.age
+            d, word = change_position(lg, team, p, slot)
+            if not word:
+                continue
+            done.add(p.id)
+            slots.add(slot)
+            proj = ovr_from_ca(fut, slot)
+            new_name = POSITION_NAMES[slot].lower()
+            if why == "start":
+                text = (f"The {team.name} are moving {old} {p.name} to {new_name}. The staff expect him "
+                        f"to rate about {proj} there once he has learned it")
+                if weakest is not None:
+                    text += f", ahead of {weakest.name} ({weakest.ovr_at(slot)})"
+                text += "."
+                if age >= 29 and (old, slot) in AGE_MOVES:
+                    text += f" At {age} he has lost a step at {POSITION_NAMES[old].lower()}."
+            else:
+                text = (f"The {team.name} are moving {old} {p.name} to {new_name}: stuck on the bench at "
+                        f"{POSITION_NAMES[old].lower()}, he projects to about {proj} there.")
+            lg.add_news("Position Change", f"{text} He is {word}.", team.abbr)
 
 
 def season_end(lg):

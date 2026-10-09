@@ -3,7 +3,7 @@ ui_widgets.py — reusable widgets: sortable tables, cards, tiles, bars, charts.
 """
 from PyQt6.QtCore import Qt, QRectF, QPointF
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QBrush, QPainterPath
-from PyQt6.QtWidgets import (QAbstractItemView, QFrame, QHBoxLayout, QHeaderView, QLabel,
+from PyQt6.QtWidgets import (QAbstractItemView, QFrame, QHBoxLayout, QHeaderView, QLabel, QMenu,
                              QMessageBox, QPushButton, QSizePolicy, QTableWidget,
                              QTableWidgetItem, QVBoxLayout, QWidget)
 
@@ -210,6 +210,7 @@ class DataTable(QTableWidget):
         hh.sortIndicatorChanged.connect(self._sort_changed)
         self.cellDoubleClicked.connect(self._double_clicked)
         self.on_activate = None
+        self.on_context = None        # key -> [(label, fn)] for a right-click menu (None = separator)
         self._state_key = None
         self._pending_sort = None
         self.setSortingEnabled(False)
@@ -314,6 +315,27 @@ class DataTable(QTableWidget):
     def selected_key(self):
         row = self.currentRow()
         return self.key_at(row) if row >= 0 else None
+
+    def context_actions(self, row):
+        """The right-click menu entries for a row: [(label, fn)], a None label for a separator."""
+        if self.on_context is None or row < 0:
+            return []
+        key = self.key_at(row)
+        return (self.on_context(key) or []) if key is not None else []
+
+    def contextMenuEvent(self, event):
+        row = self.rowAt(event.pos().y())
+        acts = self.context_actions(row)
+        if not acts:
+            return
+        self.selectRow(row)
+        menu = QMenu(self)
+        for label, fn in acts:
+            if label is None:
+                menu.addSeparator()
+            else:
+                menu.addAction(label).triggered.connect(lambda _c=False, f=fn: f())
+        menu.exec(event.globalPos())
 
     def fit_height(self, max_rows=None):
         n = self.rowCount() if max_rows is None else min(self.rowCount(), max_rows)
