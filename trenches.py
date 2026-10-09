@@ -13,6 +13,11 @@ Run blocking: blockers at the point of attack are paired with the defenders
 there (doubles where there are spare blockers, unblocked defenders where there
 are not). The average margin of those matchups is the play's blocking edge;
 big wins are pancakes, lost blocks are run-defense wins for the defender.
+
+Players can line up away from their own position, so every role check here
+goes through `pos(player)` - the slot he is playing this snap - and players
+who blew their assignment (`bust`, mostly ones still learning a position)
+lose their matchup outright.
 """
 import math
 import random
@@ -54,8 +59,12 @@ def run_block_value(e, p, weights):
     return sum(e(p, a) * k for a, k in weights.items())
 
 
-def run_def_value(e, p):
-    if p.position in ("LB", "S", "CB"):
+def _own(p):
+    return p.position
+
+
+def run_def_value(e, p, pos=_own):
+    if pos(p) in ("LB", "S", "CB"):
         return e(p, "play_recognition") * 0.30 + e(p, "tackling") * 0.25 \
             + e(p, "block_shedding") * 0.20 + e(p, "pursuit") * 0.25
     return e(p, "run_stop") * 0.35 + e(p, "block_shedding") * 0.30 \
@@ -64,7 +73,7 @@ def run_def_value(e, p):
 
 # ── Pass protection ───────────────────────────────────────────────────────────
 
-def assign_protection(ol, extra, rushers, rng=random):
+def assign_protection(ol, extra, rushers, rng=random, pos=_own):
     """
     ol: [LT, LG, C, RG, RT]; extra: kept-in TEs/backs; rushers: [(player, kind)]
     where kind is "edge", "inside" or "blitz". Returns a list of matchups
@@ -109,7 +118,7 @@ def assign_protection(ol, extra, rushers, rng=random):
         targets = [x for x in m if x["blockers"]]
         if not targets:
             break
-        if b.position in ("OT", "IOL"):
+        if pos(b) in ("OT", "IOL"):
             # the slide goes toward the most dangerous rusher (an elite edge gets help too)
             undoubled = [x for x in targets if len(x["blockers"]) == 1] or targets
             x = max(undoubled, key=lambda t: t["rusher"].ca + (8 if t["rusher"] in inside else 0))
@@ -177,7 +186,8 @@ def resolve_pass_rush(e, m, probs, rng=random):
 
 # ── Run blocking ──────────────────────────────────────────────────────────────
 
-def run_matchups(e, ol, tes, fb, front, lbs, safeties, inside, side, weights, rng=random):
+def run_matchups(e, ol, tes, fb, front, lbs, safeties, inside, side, weights, rng=random,
+                 pos=_own, bust=()):
     """
     Pair blockers and defenders at the point of attack (and on the backside).
     side: -1 = left, +1 = right. Returns (bd, events) where bd is the blocking edge
@@ -195,8 +205,8 @@ def run_matchups(e, ol, tes, fb, front, lbs, safeties, inside, side, weights, rn
     back_bl = [b for b in order if b not in poa_bl]
     lead = [fb] if fb is not None else []
     # Defenders at the point of attack
-    dts = [d for d in front if d.position in ("DT",)]
-    eds = [d for d in front if d.position not in ("DT",)]
+    dts = [d for d in front if pos(d) == "DT"]
+    eds = [d for d in front if pos(d) != "DT"]
     if inside:
         poa_d = dts + lbs[:1]
         back_d = eds + lbs[1:2]
@@ -210,15 +220,22 @@ def run_matchups(e, ol, tes, fb, front, lbs, safeties, inside, side, weights, rn
         nonlocal tot, wsum
         blockers = list(blockers)
         for d in defenders:
-            dv = run_def_value(e, d)
+            dv = run_def_value(e, d, pos)
             if blockers:
                 b = blockers.pop(0)
-                bv = run_block_value(e, b, weights) if b.position in ("OT", "IOL") else \
-                    e(b, "run_block") * 0.55 + e(b, "impact_block") * 0.25 + e(b, "strength") * 0.20
-                margin = (bv - dv) / 28.0 + rng.gauss(0, 0.30)
+                if b.id in bust:
+                    margin = -0.55 + rng.gauss(0, 0.2)      # he blocked the wrong man
+                else:
+                    bv = run_block_value(e, b, weights) if pos(b) in ("OT", "IOL") else \
+                        e(b, "run_block") * 0.55 + e(b, "impact_block") * 0.25 + e(b, "strength") * 0.20
+                    margin = (bv - dv) / 28.0 + rng.gauss(0, 0.30)
+                if d.id in bust:
+                    margin += 0.60                         # he ran himself out of his gap
                 events.append((b, d, margin, poa))
             else:
                 margin = -0.55 + rng.gauss(0, 0.2)          # nobody blocked him
+                if d.id in bust:
+                    margin += 0.60
                 events.append((None, d, margin, poa))
             tot += margin * weight
             wsum += weight

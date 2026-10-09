@@ -93,6 +93,7 @@ def select_key(table, key):
 
 NEGOTIATIONS = []
 from ui_screens_club import DEPTH_SLOTS  # noqa: E402
+import position_fit as fit  # noqa: E402
 DEPTH_SLOT_DT = DEPTH_SLOTS.index("DT")
 DEPTH_SLOT_LB = DEPTH_SLOTS.index("LB")
 
@@ -261,6 +262,52 @@ def main():
             dc._to_top()
             dc._reset()
     step("depth chart")
+    # Anyone at any slot: the Everyone list, adding a receiver at running back, locks, auto sort
+    user = lg.user_team
+    dc.slots.setCurrentRow(DEPTH_SLOTS.index("RB"))
+    dc.everyone.setChecked(True)
+    n_listed = len(dc._listed_ids)
+    assert dc.order.rowCount() > n_listed, "Everyone should list the whole roster"
+    wr = max((p for p in user.roster if p.position == "WR" and not p.ps), key=lambda p: p.ca)
+    row = next(r for r in range(dc.order.rowCount()) if dc.order.key_at(r) == wr.id)
+    dc.order.selectRow(row)
+    dc._show_fit()
+    dc._add_remove()
+    assert wr.id in dc._listed_ids, "receiver should now be on the RB list"
+    dc.order.selectRow(dc._listed_ids.index(wr.id))
+    dc._show_fit()
+    assert "formula" in dc.fit_note.text(), dc.fit_note.text()
+    dc._to_top()
+    assert user.depth("RB")[0] is wr
+    dc._toggle_lock()
+    assert wr.id in user.depth_locks["RB"]
+    dc.keep_sorted.setChecked(True)
+    assert user.depth_auto and user.depth("RB")[0] is wr, "a locked player keeps his place"
+    dc.order.selectRow(len(dc._listed_ids) - 1)
+    dc._move(-1)
+    dc._drop(dc.order.rowCount() - 1, 1)
+    dc.keep_sorted.setChecked(False)
+    dc._auto()
+    dc._auto_all()
+    assert user.depth("RB")[0] is wr, "auto sort keeps locked players"
+    dc.order.selectRow(dc._listed_ids.index(wr.id))
+    dc._toggle_lock()
+    dc._lineup()
+    assert "Warnings" in dc.lineup_text.text() or wr.position == "RB"
+    for i in range(dc.slots.count()):
+        dc.slots.setCurrentRow(i)
+    dc.tabs.setCurrentIndex(1)
+    assert dc.matrix.rowCount() > 40
+    dc._matrix_pick(0, 3 + __import__("ratings").POSITIONS.index("S"))
+    dc._matrix_pick(1, 0)
+    assert dc.tabs.currentIndex() == 0
+    dc.everyone.setChecked(False)
+    # Leave the receiver at running back for the season so the engine and learning paths run
+    dc.slots.setCurrentRow(DEPTH_SLOTS.index("RB"))
+    ids = [wr.id] + [i for i in user.depth_overrides.get("RB", []) if i != wr.id]
+    user.depth_overrides["RB"] = ids
+    OOP_PLAYER = (wr, fit.familiarity(wr, "RB"))
+    step("depth chart: anyone at any slot")
     tac = win.screens["tactics"]
     for key, (s, _) in tac.sliders.items():
         s.setValue(80)
@@ -351,6 +398,11 @@ def main():
         win.continue_clicked()
         step(f"continue {lg.week_label}")
     visit_all("week3")
+    wr, fam0 = OOP_PLAYER
+    if wr.team == lg.user_abbr and lg.week >= 1:
+        assert fit.familiarity(wr, "RB") > fam0, (fam0, fit.familiarity(wr, "RB"))
+        step(f"learning RB: {fam0:.0f} -> {fit.familiarity(wr, 'RB'):.0f}, "
+             f"{wr.season_stats['rush_att']} carries")
     win.goto("game")
     gc = win.screens["game"]
     for i in range(min(3, gc.picker.count())):

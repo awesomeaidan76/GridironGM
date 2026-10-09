@@ -11,6 +11,7 @@ import random
 from collections import Counter
 
 import names
+import position_fit
 from ratings import (ATTRIBUTES, PHYSICAL_ATTRS, MENTAL_ATTRS, ATHLETIC_ATTRS,
                      POSITION_WEIGHTS, HIDDEN_TRAITS, AGE_CURVES,
                      compute_ca, average_for_ca, stars_for, ca_tier,
@@ -67,8 +68,8 @@ CROSS_SKILLS = {
              "run_block": -22, "impact_block": -24},
     "FB":   {"short_route_running": -14, "release": -22, "vision": -10,
              "stiff_arm": -16},
-    "WR":   {"vision": -10, "juke_spin": -8, "contact_balance": -16,
-             "stiff_arm": -20, "run_block": -26, "impact_block": -30},
+    "WR":   {"vision": -16, "juke_spin": -12, "contact_balance": -20,
+             "stiff_arm": -24, "run_block": -26, "impact_block": -30},
     "TE":   {"vision": -16, "break_tackle": -10, "contact_balance": -12,
              "stiff_arm": -14, "footwork": -20},
     "OT":   {"run_stop": -40},
@@ -320,6 +321,8 @@ class Player:
     holdout = False         # staying away from the team over his contract
     holdout_weeks = 0
     fa_origin = None        # (team, year) when he left a team in free agency
+    familiarity = None      # {slot: 0-100} learned at other positions (position_fit.py)
+    fam_used = None         # {slot: season} last season he got reps there
 
     def __init__(self, name, position, age):
         self.id = next_player_id()
@@ -370,10 +373,16 @@ class Player:
 
     # ── Ratings ──────────────────────────────────────────────────────────────
 
+    def __getstate__(self):
+        state = dict(self.__dict__)
+        state.pop("_fit_cache", None)
+        return state
+
     def recalc(self):
         self._ca = compute_ca(self.attrs, self.position)
         if self._ca > self.pa:
             self.pa = self._ca
+        self.__dict__.pop("_fit_cache", None)
         return self._ca
 
     @property
@@ -381,9 +390,10 @@ class Player:
         return self._ca
 
     def rating_at(self, position):
+        """CA at any slot: his own position, or that slot's formula with size fit and familiarity."""
         if position == self.position:
             return self._ca
-        return compute_ca(self.attrs, position)
+        return position_fit.slot_ca(self, position)
 
     # ── Display ratings (1-99, position-relative) ────────────────────────────
     @property
@@ -399,6 +409,24 @@ class Player:
 
     def ovr_at(self, position):
         return ovr_from_ca(self.rating_at(position), position)
+
+    def pot_at(self, position):
+        """Projected peak rating at a slot, once he has learned it."""
+        if position == self.position:
+            return self.pot
+        return ovr_from_ca(position_fit.slot_pot_ca(self, position), position)
+
+    def pot_range_at(self, position, scouting=10):
+        """The scouts' potential range at a slot (what he could be there once he has learned it)."""
+        if position == self.position:
+            return self.scouted_pot_range(scouting)
+        base = position_fit.learned_ca(self, position)
+        if self.age > self.curve()[1] or self.years_to_peak() <= 0:
+            v = ovr_from_ca(base, position)
+            return (v, v)
+        lo, hi = self.scouted_pa_range(scouting)
+        cov = position_fit.coverage(self.position, position)
+        return tuple(ovr_from_ca(min(200, base + max(0, b - self._ca) * cov), position) for b in (lo, hi))
 
     @property
     def roles(self):

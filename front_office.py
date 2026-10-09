@@ -748,6 +748,72 @@ def _recent_pct(team, n=3):
     return sum(x["w"] + 0.5 * x["t"] for x in h) / g if g else 0.5
 
 
+# ── Depth charts: starting a player out of position ───────────────────────────
+# CPU staffs fill their depth charts by position, and cover injuries from other
+# positions on game day (team.lineup). Once a week they also look for a player
+# who would be overwhelmingly better somewhere else than the man starting there
+# (OOP_MARGIN CA points, about ten rating points) and start him there. Stars get
+# the benefit of the doubt (reputation), and adaptable head coaches try it sooner;
+# a player still learning the slot is judged on what he can do there today.
+
+OOP_MARGIN = 17.0
+OOP_SLOTS = ("RB", "FB", "WR", "TE", "OT", "IOL", "DT", "EDGE", "LB", "CB", "S")
+
+
+def oop_margin(team, p):
+    """CA points better than the starter a player must be before this staff moves him."""
+    m = OOP_MARGIN
+    rep = getattr(p, "reputation", 10)
+    if rep > 50:
+        m -= (rep - 50) / 50.0 * 6.0          # a big name gets the benefit of the doubt
+    m -= (team.coach.r("adaptability") - 10) * 0.4
+    return max(7.0, m)
+
+
+def weekly_depth(lg, team, news=True):
+    """A CPU staff's out-of-position starters for this week (team.cpu_oop), with news when it changes."""
+    if team.abbr == lg.user_abbr:
+        team.cpu_oop = None
+        return
+    old = team.cpu_oop or {}
+    team.cpu_oop = {}
+    from position_fit import STARTERS
+    busy = team.starter_ids()
+    pool = [p for p in team.roster if p.id not in busy and not p.ps and not p.ir and not p.holdout
+            and not p.is_injured]
+    picks = []
+    for slot in OOP_SLOTS:
+        start = team.depth(slot)[:STARTERS[slot]]
+        if len(start) < STARTERS[slot]:
+            continue                            # short-handed: game-day cover handles it
+        weakest = min(start, key=lambda q: q.rating_at(slot))
+        bar = weakest.rating_at(slot)
+        for p in pool:
+            if p.position == slot:
+                continue
+            gain = p.rating_at(slot) - bar
+            m = oop_margin(team, p)
+            if gain >= m:
+                picks.append((gain - m, p, slot, weakest))
+    picks.sort(key=lambda x: -x[0])
+    taken, filled = set(), set()
+    for _, p, slot, weakest in picks:
+        if p.id in taken or slot in filled:
+            continue
+        taken.add(p.id)
+        filled.add(slot)
+        team.cpu_oop[slot] = [p.id]
+        if news and p.id not in old.get(slot, []):
+            lg.add_news("Depth Chart", f"The {team.name} are starting {p.position} {p.name} at {slot}: "
+                                       f"he rates {p.ovr_at(slot)} there, ahead of {weakest.name} "
+                                       f"({weakest.ovr_at(slot)}).", team.abbr)
+
+
+def weekly_depth_all(lg, news=True):
+    for t in lg.teams.values():
+        weekly_depth(lg, t, news)
+
+
 def season_end(lg):
     """After the season: GM records, learning, copycat drift, owner and GM turnover."""
     ensure(lg)

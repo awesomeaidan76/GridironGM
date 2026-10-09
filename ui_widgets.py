@@ -347,6 +347,42 @@ class Card(QFrame):
         return w
 
 
+class DragTable(DataTable):
+    """
+    A DataTable whose rows can be dragged to a new place (the depth chart).
+    The table never moves its own rows: on a drop it calls on_drop(from_row,
+    to_row) and the screen rebuilds the list in its new order.
+    """
+
+    def __init__(self, columns, stretch=None, parent=None):
+        super().__init__(columns, stretch=stretch, sortable=False, parent=parent)
+        self.on_drop = None
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.viewport().setAcceptDrops(True)
+        self.setDragDropOverwriteMode(False)
+        self.setDropIndicatorShown(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
+        self.setDefaultDropAction(Qt.DropAction.MoveAction)
+
+    def dropEvent(self, event):
+        if event.source() is not self or self.on_drop is None:
+            event.ignore()
+            return
+        src = self.currentRow()
+        idx = self.indexAt(event.position().toPoint())
+        dst = idx.row() if idx.isValid() else self.rowCount() - 1
+        if idx.isValid() and self.dropIndicatorPosition() == \
+                QAbstractItemView.DropIndicatorPosition.BelowItem and dst < src:
+            dst += 1
+        # Copy, not move: Qt must not clear the dragged row after the screen has rebuilt the table
+        event.setDropAction(Qt.DropAction.CopyAction)
+        event.accept()
+        if src >= 0 and dst >= 0 and src != dst:
+            self.on_drop(src, dst)
+
+
+
 class StatTile(QFrame):
     def __init__(self, label, value="—", sub="", parent=None):
         super().__init__(parent)

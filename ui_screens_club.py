@@ -5,13 +5,15 @@ Staff and Finances.
 from collections import Counter
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import (QComboBox, QDoubleSpinBox, QGridLayout, QHBoxLayout, QLabel, QListWidget,
+from PyQt6.QtGui import QKeySequence, QShortcut
+from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QGridLayout, QHBoxLayout, QLabel, QListWidget,
                              QListWidgetItem, QPushButton, QScrollArea, QSlider, QSpinBox, QTabWidget,
                              QTextBrowser, QVBoxLayout, QWidget)
 
 import capplan
 import free_agency as fa
 import inbox
+import position_fit as fit
 import roster_rules as rr
 from coach import COACH_RATINGS, COACH_RATING_LABELS, OFFENSIVE_SCHEMES, DEFENSIVE_SCHEMES
 from contracts import market_value
@@ -19,9 +21,10 @@ from ratings import (POSITIONS, POSITION_NAMES, key_attributes, attr_abbr, ROSTE
 from season import PHASE_TITLES, continue_label
 from settings import settings
 from stats import summary_line, total_tackles
+from position_fit import DEPTH_SLOTS, RETURN_SLOTS, STARTERS
 from team import TACTIC_SLIDERS
 from ui_theme import T, accent, attr_color, ca_color, morale_color, ovr_color, result_color
-from ui_widgets import (AttrBar, Card, Chip, DataTable, StatTile, TeamBadge, attr_cell, ovr_cell, pot_cell,
+from ui_widgets import (AttrBar, Card, Chip, DataTable, DragTable, StatTile, TeamBadge, attr_cell, ovr_cell, pot_cell,
                         cell, clear_layout, confirm, divider, filter_chips, form_cell, h_label, info, money,
                         pot_text, personality, screen_header, USER_ROLE)
 
@@ -655,14 +658,14 @@ class RosterScreen(Screen):
 
 # ── Depth chart ───────────────────────────────────────────────────────────────
 
-DEPTH_SLOTS = POSITIONS + ["KR", "PR"]
-STARTERS = {"QB": 1, "RB": 1, "FB": 1, "WR": 3, "TE": 1, "OT": 2, "IOL": 3, "DT": 2,
-            "EDGE": 2, "LB": 3, "CB": 3, "S": 2, "K": 1, "P": 1, "KR": 1, "PR": 1}
+FIT_COLORS = {"Natural": None, "Accomplished": "good", "Competent": None, "Learning": "warn",
+              "Awkward": "bad", "Unfamiliar": "bad"}
 
 
 class DepthChartScreen(Screen):
     title = "Depth Chart"
-    subtitle = "Order players at each position. Starters are highlighted; injured players are skipped on game day."
+    subtitle = ("Anyone can play anywhere: a player's rating is recalculated for the slot from his own "
+                "attributes, his size and how well he knows the position. Injured players are skipped on game day.")
 
     def __init__(self, main):
         super().__init__(main)
@@ -679,12 +682,36 @@ class DepthChartScreen(Screen):
         self.slots.currentRowChanged.connect(lambda _r: self._show_slot())
         body.addWidget(self.slots)
 
-        mid = QVBoxLayout()
+        self.tabs = QTabWidget()
+        page = QWidget()
+        mid = QVBoxLayout(page)
+        mid.setContentsMargins(0, 8, 0, 0)
+        top = QHBoxLayout()
         self.slot_title = h_label("", "h2")
-        mid.addWidget(self.slot_title)
-        self.order = DataTable(["#", "Name", "Pos", "Age", "Rating", "Stamina", "Snap %", "Status"],
-                               stretch=1, sortable=False)
+        top.addWidget(self.slot_title)
+        top.addStretch(1)
+        self.everyone = QCheckBox("Everyone")
+        self.everyone.setToolTip("List the whole roster with each player's rating at this slot, so you can "
+                                 "play anyone here.")
+        self.everyone.toggled.connect(lambda _c: self._show_slot())
+        top.addWidget(self.everyone)
+        self.keep_sorted = QCheckBox("Keep auto sorted")
+        self.keep_sorted.setToolTip("Every slot stays sorted by rating as players improve, get hurt or "
+                                    "join the team. Locked players keep their places.")
+        self.keep_sorted.toggled.connect(self._keep_sorted_changed)
+        top.addWidget(self.keep_sorted)
+        mid.addLayout(top)
+        self.order = DragTable(["#", "Lock", "Name", "Pos", "Age", "Slot OVR", "Slot POT", "Fit", "Stamina",
+                                "Snap %", "Status"], stretch=2)
+        self.order.on_drop = self._drop
+        self.order.on_activate = self.main.open_player
+        self.order.itemSelectionChanged.connect(self._show_fit)
         mid.addWidget(self.order, 1)
+        self.fit_note = QLabel("")
+        self.fit_note.setObjectName("muted")
+        self.fit_note.setWordWrap(True)
+        self.fit_note.setTextFormat(Qt.TextFormat.RichText)
+        mid.addWidget(self.fit_note)
         rot = QHBoxLayout()
         rot.addWidget(QLabel("Rotation:"))
         self.rot_combo = QComboBox()
@@ -699,14 +726,48 @@ class DepthChartScreen(Screen):
         rot.addWidget(self.rot_note, 1)
         mid.addLayout(rot)
         btns = QHBoxLayout()
-        for label, fn in (("▲ Up", lambda: self._move(-1)), ("▼ Down", lambda: self._move(1)),
-                          ("Make Starter", self._to_top), ("Reset to Auto", self._reset)):
+        for label, fn, tip in (
+                ("▲ Up", lambda: self._move(-1), "Move up (Ctrl+Up). You can also drag players."),
+                ("▼ Down", lambda: self._move(1), "Move down (Ctrl+Down)"),
+                ("Make Starter", self._to_top, "Put him first at this slot"),
+                ("Add / Remove", self._add_remove, "Add a player from another position to this slot, "
+                                                   "or take him off it"),
+                ("Lock / Unlock", self._toggle_lock, "Auto sort never moves a locked player")):
             b = QPushButton(label)
+            b.setToolTip(tip)
             b.clicked.connect(fn)
             btns.addWidget(b)
         btns.addStretch(1)
         mid.addLayout(btns)
-        body.addLayout(mid, 3)
+        btns2 = QHBoxLayout()
+        for label, fn, tip in (
+                ("Auto Sort", self._auto, "Sort this slot by rating at the slot. Players from other "
+                                          "positions are added only if clearly better than your starters."),
+                ("Auto Sort All", self._auto_all, "Auto sort every slot"),
+                ("Reset to Auto", self._reset, "Clear this slot's list: its own position, best first")):
+            b = QPushButton(label)
+            b.setToolTip(tip)
+            b.clicked.connect(fn)
+            btns2.addWidget(b)
+        btns2.addStretch(1)
+        mid.addLayout(btns2)
+        self.tabs.addTab(page, "By Slot")
+
+        mpage = QWidget()
+        mlay = QVBoxLayout(mpage)
+        mlay.setContentsMargins(0, 8, 0, 0)
+        note = QLabel("Every player's rating at every position today (his own in bold). "
+                      "Double-click a rating to put him at that slot.")
+        note.setObjectName("muted")
+        note.setWordWrap(True)
+        mlay.addWidget(note)
+        self.matrix = DataTable(["Name", "Pos", "Age"] + POSITIONS, stretch=0)
+        self.matrix.remember("depth_matrix")
+        self.matrix.cellDoubleClicked.connect(self._matrix_pick)
+        mlay.addWidget(self.matrix, 1)
+        self.tabs.addTab(mpage, "Position Matrix")
+        self.tabs.currentChanged.connect(lambda _i: self._fill_matrix())
+        body.addWidget(self.tabs, 3)
 
         self.lineup = Card("Game-Day Lineup")
         self.lineup_text = QLabel()
@@ -717,6 +778,10 @@ class DepthChartScreen(Screen):
         self.lineup.setMinimumWidth(300)
         body.addWidget(self.lineup, 2)
         self.outer.addLayout(body, 1)
+        for keys, d in (("Ctrl+Up", -1), ("Ctrl+Down", 1)):
+            sc = QShortcut(QKeySequence(keys), self)
+            sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            sc.activated.connect(lambda d=d: self._move(d))
         self.slots.setCurrentRow(0)
 
     def _slot(self):
@@ -724,45 +789,119 @@ class DepthChartScreen(Screen):
         return it.data(USER_ROLE) if it else "QB"
 
     def _candidates(self, slot):
+        """(players on this slot's list in order, everyone else when the Everyone box is ticked)."""
         team = self.user
-        if slot in ("KR", "PR"):
-            pool = [p for p in team.roster if p.position in ("RB", "WR", "CB", "S")]
+        if slot in RETURN_SLOTS:
             order = team.depth_overrides.get(slot, [])
             rank = {pid: i for i, pid in enumerate(order)}
-            return sorted(pool, key=lambda p: (rank.get(p.id, 999), -p.return_rating))
-        return team.depth(slot, include_injured=True)
+            pool = [p for p in team.roster if not p.ps and
+                    (p.position in ("RB", "WR", "CB", "S") or p.id in rank)]
+            listed = sorted(pool, key=lambda p: (rank.get(p.id, 999), -p.return_rating))
+        else:
+            listed = team.full_depth(slot)
+        others = []
+        if self.everyone.isChecked():
+            ids = {p.id for p in listed}
+            others = sorted((p for p in team.roster if p.id not in ids and not p.ps),
+                            key=lambda p: -self._rating(p, slot))
+        return listed, others
 
     def _rating(self, p, slot):
-        return p.return_rating if slot in ("KR", "PR") else p.ovr_at(slot)
+        return p.return_rating if slot in RETURN_SLOTS else p.ovr_at(slot)
+
+    def _fit_cell(self, p, slot):
+        if slot in RETURN_SLOTS or p.position == slot:
+            return cell("Natural" if p.position == slot else "", 100)
+        fam = fit.familiarity(p, slot)
+        label = fit.familiarity_label(fam)
+        under, over = fit.size_gap(p, slot)
+        size = " · light" if under > 0.05 else " · heavy" if over > 0.05 else ""
+        col = FIT_COLORS.get(label)
+        if size and col is None:
+            col = "warn"
+        return cell(f"{label} {fam:.0f}{size}", fam, color=T(col) if col else None,
+                    tip=f"Familiarity {fam:.0f}/100 at {slot}" + (f"; {fit.size_note(p, slot)}" if size else ""))
 
     def _show_slot(self):
         slot = self._slot()
+        team = self.user
         self.slot_title.setText({"KR": "Kick Returner", "PR": "Punt Returner"}.get(
             slot, POSITION_NAMES.get(slot, slot)))
-        players = self._candidates(slot)
+        self.keep_sorted.blockSignals(True)
+        self.keep_sorted.setChecked(bool(team.depth_auto))
+        self.keep_sorted.blockSignals(False)
+        listed, others = self._candidates(slot)
+        self._listed_ids = [p.id for p in listed]
         rows, keys = [], []
         n_start = STARTERS.get(slot, 1)
         healthy_rank = 0
-        team = self.user
-        unit = "def_snaps" if slot in ("DT", "EDGE", "LB", "CB", "S") else "off_snaps"
+        unit = "def_snaps" if slot in fit.DEFENSE_SLOTS else "off_snaps"
         team_snaps = max([p.season_stats[unit] for p in team.roster] + [1])
-        for i, p in enumerate(players):
+        locks = set((team.depth_locks or {}).get(slot, []))
+        two = team.two_slot_starters() if slot not in RETURN_SLOTS else {}
+        scouting = team.scouting
+        for i, p in enumerate(listed + others):
+            on_list = i < len(listed)
             starter = False
-            if not p.is_injured and not p.holdout:
+            if on_list and not p.is_injured and not p.holdout and not p.ir:
                 healthy_rank += 1
                 starter = healthy_rank <= n_start
             share = 100.0 * p.season_stats[unit] / team_snaps
-            status = (f"{p.injury['name']} ({max(0, p.injury['weeks'])}w)" if p.injury else
-                      "Holding out" if p.holdout else ("Starter" if starter else ""))
-            rows.append([cell(i + 1, i), cell(p.name, bold=starter, color=accent() if starter else None),
-                         p.position, p.age, ovr_cell(self._rating(p, slot)),
+            elsewhere = [s for s in two.get(p.id, []) if s != slot]
+            if p.injury:
+                status, col = f"{p.injury['name']} ({max(0, p.injury['weeks'])}w)", T("bad")
+            elif p.holdout:
+                status, col = "Holding out", T("bad")
+            elif not on_list:
+                status, col = "Not on this list", T("muted")
+            elif starter and elsewhere:
+                status, col = f"Starter (also starts at {', '.join(elsewhere)})", T("warn")
+            else:
+                status, col = ("Starter" if starter else ""), None
+            own = p.position == slot or slot in RETURN_SLOTS
+            if slot in RETURN_SLOTS:
+                pot = cell("", 0)
+            else:
+                lo, hi = p.pot_range_at(slot, scouting)
+                pot = cell(f"{lo}" if lo == hi else f"{lo}–{hi}", hi, color=ovr_color((lo + hi) // 2))
+            rows.append([cell(i + 1 if on_list else "—", i),
+                         cell("🔒" if p.id in locks else "", 1 if p.id in locks else 0),
+                         cell(p.name, bold=starter, color=accent() if starter else None),
+                         cell(p.position, color=None if own else T("warn"),
+                              tip=None if own else f"{p.ovr} at his own position ({p.position})"),
+                         p.age, ovr_cell(self._rating(p, slot)), pot, self._fit_cell(p, slot),
                          cell(p.attrs.get("stamina", 0), p.attrs.get("stamina", 0)),
                          cell(f"{share:.0f}%" if p.season_stats[unit] else "—", share),
-                         cell(status, color=T("bad") if (p.injury or p.holdout) else None)])
+                         cell(status, color=col)])
             keys.append(p.id)
         self.order.set_rows(rows, keys)
         self._show_rotation(slot)
+        self._show_fit()
         self._lineup()
+
+    def _show_fit(self):
+        """Why the selected player is rated what he is at this slot."""
+        slot = self._slot()
+        pid = self.order.selected_key()
+        p = self.user.get_player(pid) if pid is not None else None
+        if p is None or slot in RETURN_SLOTS:
+            self.fit_note.setText("")
+            return
+        if p.position == slot:
+            self.fit_note.setText(f"<b>{p.name}</b> is a natural {slot}: {p.ovr} OVR.")
+            return
+        b = fit.breakdown(p, slot)
+        parts = [f"<b>{p.name}</b> ({p.position} {p.ovr}) at {slot}: the {slot} formula on his "
+                 f"attributes gives {b['formula']}"]
+        if b["size"]:
+            parts.append(f"{b['size']}: {b['after_size'] - b['formula']:+d}")
+        parts.append(f"familiarity {b['fam_label']} ({b['familiarity']:.0f}/100): "
+                     f"{b['ovr'] - b['after_size']:+d}")
+        tail = f" = <b>{b['ovr']}</b> today"
+        if b["familiarity"] < 90:
+            tail += (f", about {b['after_size']} once he knows the position "
+                     f"(roughly {b['weeks_to_learn']} weeks of practice and game reps)")
+        self.fit_note.setText("; ".join(parts) + tail + ".")
 
     ROT_GROUPS = {"DT": "DL", "EDGE": "DL", "LB": "LB", "CB": "DB", "S": "DB", "WR": "WR", "TE": "TE",
                   "RB": "RB", "OT": "OL", "IOL": "OL"}
@@ -775,8 +914,8 @@ class DepthChartScreen(Screen):
         self.rot_combo.setCurrentIndex(max(0, self.rot_combo.findData(cur)))
         self.rot_combo.blockSignals(False)
         self.rot_note.setText(
-            f"Applies to the whole {grp} group. Tired players lose speed, strength and technique and get "
-            "hurt more; fresher backups come in when they're the better option at that moment."
+            f"Applies to the whole {grp} group. Your order decides who plays: backups come in to rest "
+            "tired starters (tired players lose speed, strength and technique and get hurt more)."
             if grp else "Quarterbacks, kickers and returners don't rotate (except in blowouts).")
 
     def _rotation_changed(self):
@@ -788,13 +927,28 @@ class DepthChartScreen(Screen):
         rot[grp] = self.rot_combo.currentData()
         team.rotation = rot
 
-    def _set_order(self, ids):
-        self.user.depth_overrides[self._slot()] = ids
+    def _keep_sorted_changed(self, on):
+        self.user.depth_auto = bool(on)
         self._show_slot()
 
+    def _set_order(self, ids, moved=None):
+        team = self.user
+        slot = self._slot()
+        team.depth_overrides[slot] = ids
+        if team.depth_auto and moved is not None and slot not in RETURN_SLOTS:
+            # with Keep auto sorted on, a player you move by hand is locked where you put him
+            locks = dict(team.depth_locks or {})
+            mine = list(locks.get(slot, []))
+            if moved not in mine:
+                mine.append(moved)
+            locks[slot] = mine
+            team.depth_locks = locks
+        self._show_slot()
+        if moved in ids:
+            self.order.selectRow(ids.index(moved))
+
     def _move(self, d):
-        players = self._candidates(self._slot())
-        ids = [p.id for p in players]
+        ids = list(self._listed_ids)
         pid = self.order.selected_key()
         if pid not in ids:
             return
@@ -802,39 +956,183 @@ class DepthChartScreen(Screen):
         j = i + d
         if 0 <= j < len(ids):
             ids[i], ids[j] = ids[j], ids[i]
-            self._set_order(ids)
-            self.order.selectRow(j)
+            self._set_order(ids, pid)
 
     def _to_top(self):
-        players = self._candidates(self._slot())
-        ids = [p.id for p in players]
+        ids = list(self._listed_ids)
         pid = self.order.selected_key()
+        if pid is None:
+            return
         if pid in ids:
             ids.remove(pid)
-            self._set_order([pid] + ids)
+        self._set_order([pid] + ids, pid)
+
+    def _drop(self, src, dst):
+        pid = self.order.key_at(src)
+        ids = list(self._listed_ids)
+        if pid is None:
+            return
+        if pid in ids:
+            ids.remove(pid)
+        ids.insert(min(dst, len(ids)), pid)
+        self._set_order(ids, pid)
+
+    def _insert_by_rating(self, slot, p):
+        """Put a player on a slot's list where his rating there puts him."""
+        team = self.user
+        listed = [q for q in self._candidates(slot)[0] if q.id != p.id]
+        score = team.depth_score(p, slot) if slot not in RETURN_SLOTS else p.return_rating
+        i = next((k for k, q in enumerate(listed)
+                  if (team.depth_score(q, slot) if slot not in RETURN_SLOTS else q.return_rating) < score),
+                 len(listed))
+        ids = [q.id for q in listed]
+        ids.insert(i, p.id)
+        team.depth_overrides[slot] = ids
+        return i
+
+    def _add_remove(self):
+        slot = self._slot()
+        team = self.user
+        pid = self.order.selected_key()
+        p = team.get_player(pid) if pid is not None else None
+        if p is None:
+            return
+        if pid in self._listed_ids:
+            if p.position == slot:
+                info(self, "Depth Chart", f"{p.name} is a {slot}, so he stays on this list. "
+                                          "Move him down instead.")
+                return
+            team.depth_overrides[slot] = [i for i in self._listed_ids if i != pid]
+            for groups in (team.depth_locks or {},):
+                if pid in groups.get(slot, []):
+                    groups[slot].remove(pid)
+            self._show_slot()
+            return
+        i = self._insert_by_rating(slot, p)
+        self._show_slot()
+        self.order.selectRow(i)
+
+    def _toggle_lock(self):
+        slot = self._slot()
+        team = self.user
+        pid = self.order.selected_key()
+        if pid is None or pid not in self._listed_ids or slot in RETURN_SLOTS:
+            return
+        team.depth_overrides[slot] = list(self._listed_ids)     # the lock holds his current place
+        locks = dict(team.depth_locks or {})
+        mine = list(locks.get(slot, []))
+        if pid in mine:
+            mine.remove(pid)
+        else:
+            mine.append(pid)
+        locks[slot] = mine
+        team.depth_locks = locks
+        self._show_slot()
+        self.order.selectRow(self._listed_ids.index(pid))
+
+    def _auto(self):
+        slot = self._slot()
+        if slot in RETURN_SLOTS:
+            self._reset()
+            return
+        self.user.auto_sort(slot)
+        self._show_slot()
+
+    def _auto_all(self):
+        self.user.auto_sort_all()
+        self._show_slot()
 
     def _reset(self):
-        self.user.depth_overrides.pop(self._slot(), None)
+        slot = self._slot()
+        self.user.depth_overrides.pop(slot, None)
+        if self.user.depth_locks:
+            self.user.depth_locks.pop(slot, None)
         self._show_slot()
+
+    def _fill_matrix(self):
+        if self.tabs.currentIndex() != 1:
+            return
+        team = self.user
+        players = [p for p in team.roster if not p.ps]
+        players.sort(key=lambda p: (POSITIONS.index(p.position), -p.ca))
+        rows, keys = [], []
+        for p in players:
+            row = [cell(p.name), cell(p.position, POSITIONS.index(p.position)), p.age]
+            for slot in POSITIONS:
+                v = p.ovr_at(slot)
+                c = ovr_cell(v)
+                if slot == p.position:
+                    c["tip"] = "His own position"
+                else:
+                    c["bold"] = False
+                    c["tip"] = f"{fit.familiarity_label(fit.familiarity(p, slot))} at {slot}"
+                row.append(c)
+            rows.append(row)
+            keys.append(p.id)
+        self.matrix.set_rows(rows, keys)
+
+    def _matrix_pick(self, row, col):
+        if col < 3:
+            pid = self.matrix.key_at(row)
+            if pid is not None:
+                self.main.open_player(pid)
+            return
+        slot = POSITIONS[col - 3]
+        team = self.user
+        p = team.get_player(self.matrix.key_at(row))
+        if p is None:
+            return
+        self.slots.setCurrentRow(DEPTH_SLOTS.index(slot))
+        if p.id not in self._listed_ids:
+            self._insert_by_rating(slot, p)
+        self.tabs.setCurrentIndex(0)
+        self._show_slot()
+        if p.id in self._listed_ids:
+            self.order.selectRow(self._listed_ids.index(p.id))
 
     def _lineup(self):
         team = self.user
         s = team.starters()
         kr, pr = team.returner("KR"), team.returner("PR")
 
+        def name(p, pos):
+            tag = "" if p.position == pos else f" <span style='color:{T('warn')}'>({p.position})</span>"
+            return f"{p.name}{tag} <span style='color:{ovr_color(p.ovr_at(pos))}'>{p.ovr_at(pos)}</span>"
+
         def line(pos, players):
-            return f"<b>{pos}</b> " + ", ".join(
-                f"{p.name} <span style='color:{ovr_color(p.ovr_at(pos))}'>{p.ovr_at(pos)}</span>"
-                for p in players)
+            return f"<b>{pos}</b> " + ", ".join(name(p, pos) for p in players)
         off = [line(k, s[k]) for k in ("QB", "RB", "WR", "TE", "OT", "IOL")]
         de = [line(k, s[k]) for k in ("DT", "EDGE", "LB", "CB", "S")]
         st = [line(k, s[k]) for k in ("K", "P")]
         st.append(f"<b>KR</b> {kr.name if kr else '—'} · <b>PR</b> {pr.name if pr else '—'}")
-        self.lineup_text.setText("<br>".join(["<u>Offense</u>"] + off + ["", "<u>Defense</u>"] + de
-                                             + ["", "<u>Special Teams</u>"] + st))
+        warn = []
+        byid = {p.id: p for p in team.roster}
+        for pid, slots in team.two_slot_starters().items():
+            p = byid.get(pid)
+            if p is not None:
+                warn.append(f"{p.name} starts at {' and '.join(slots)}: one spot per snap, "
+                            "and fatigue counts every snap he plays")
+        for pos, players in s.items():
+            for p in players:
+                if p.position == pos:
+                    continue
+                fam = fit.familiarity(p, pos)
+                if fam < 70:
+                    warn.append(f"{p.name} is still learning {pos} ({fit.familiarity_label(fam).lower()}, "
+                                f"{fam:.0f}/100): expect penalties and blown assignments")
+                note = fit.size_note(p, pos)
+                if note:
+                    warn.append(f"{p.name} is {note}")
+        text = "<br>".join(["<u>Offense</u>"] + off + ["", "<u>Defense</u>"] + de
+                           + ["", "<u>Special Teams</u>"] + st)
+        if warn:
+            text += f"<br><br><span style='color:{T('warn')}'><b>Warnings</b><br>" + \
+                "<br>".join("• " + w for w in warn) + "</span>"
+        self.lineup_text.setText(text)
 
     def refresh(self):
         self._show_slot()
+        self._fill_matrix()
 
 
 # ── Tactics ───────────────────────────────────────────────────────────────────

@@ -152,7 +152,7 @@ def _scarcity(league):
                 mu = OVR_ANCHORS[pos][0]
                 n = {"WR": 3, "OT": 2, "IOL": 3, "DT": 2, "EDGE": 2, "LB": 2, "CB": 3, "S": 2}.get(pos, 1)
                 for p in t.lineup(pos, n):
-                    diffs.append(mu - p.ca)
+                    diffs.append(mu - p.rating_at(pos))
         if diffs:
             out[g] = max(-7.0, min(7.0, sum(diffs) / len(diffs) / 1.8))
     return out

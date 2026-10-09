@@ -93,6 +93,25 @@ RATING_DESC = [
                         "range. Past his prime a player's potential is simply his current rating."),
     ("Role ratings", "How well a player fits each role at his position (for example Power Back vs Receiving "
                      "Back). They use the same 1-99 scale but weight the attributes that role needs."),
+    ("Playing out of position", "Anyone can be put at any slot on the depth chart. His rating there (Slot OVR) "
+     "is that position's formula applied to his own attributes, so a receiver at running back is judged on vision, "
+     "balance and breaking tackles, which receivers rarely have. Then his size and how well he knows the "
+     "position count. His rating at his own position never changes, and his contract is valued at his own "
+     "position."),
+    ("Familiarity", "How well he knows a position, 0-100: always 100 (Natural) at his own. Elsewhere he starts "
+     "with what carries over (a tackle already knows a lot about guard, a receiver very little about corner) "
+     "and learns from practice reps when he is on that slot's depth chart (starters get the most) and from "
+     "game snaps there: about four weeks for a related move, a season or more for an unrelated one. "
+     "Adaptable, football-smart players learn faster, and skills at a position he stops playing fade a little "
+     "each offseason. Low familiarity costs his mental attributes, the techniques his own position never uses "
+     "and, a little, the ones it does. Accomplished 90+, Competent 70+, Learning 45+, Awkward 20+, below that "
+     "Unfamiliar."),
+    ("Size fit", "Every position has a normal build. A player well outside it pays for it there: too light and "
+     "he loses strength, blocking, block shedding and tackle-breaking (a 245 lb linebacker gets moved by 315 lb "
+     "guards); too heavy and he loses speed and quickness; either way everything he does at that spot suffers a "
+     "little. Inside the normal range there is no effect."),
+    ("Slot POT", "What he could become at a slot once he has learned it: his rating there with full "
+     "familiarity, plus the growth he still has in him, in proportion to how much the two positions share."),
     ("Tiers", "Elite 90+, Pro Bowl 82-89, Starter 72-81, Rotation 64-71, Backup 55-63, Fringe below 55."),
     ("Attributes (1-100)", "90+ world class, 75-89 quality, 60-74 solid starter level, 45-59 backup, below 45 poor."),
     ("Development", "Each offseason a player grows, holds or declines depending on age, potential, work ethic, "
@@ -136,10 +155,23 @@ GAMEDAY_DESC = [
      "The huddle gives a little back, the sideline a lot, halftime most of it. A tired player loses speed, "
      "strength and technique and is more likely to get hurt. Stamina decides how fast he tires. Heat and "
      "no-huddle offenses (which stop the defense substituting) wear players down faster."),
-    ("Rotation", "On every snap the staff compares each starter's ability, discounted by how tired he is, "
-     "with the fresher backups, and the better option plays. Defensive linemen rotate the most, offensive "
-     "linemen and quarterbacks almost never. Set each group's rotation on the Depth Chart. In a blowout "
-     "late in the game the backups take over."),
+    ("Rotation", "Your depth chart decides who plays. On every snap the staff checks how tired each starter "
+     "is, and a fresher backup comes in to rest him when that is the better option at that moment. A starter "
+     "is never benched just because someone listed behind him rates higher. Defensive linemen rotate the most, "
+     "offensive linemen and quarterbacks almost never. Set each group's rotation on the Depth Chart. In a "
+     "blowout late in the game the backups take over."),
+    ("Two slots", "A player can be listed at two slots (a receiver who also plays corner, a starter who returns "
+     "kicks). He plays one spot per snap: when both of his slots are on the field together he plays the first "
+     "(quarterback, line, running back, tight end, receiver; on defense line, linebacker, corner, safety) and "
+     "the next man on the other list steps in. Every snap he plays costs energy."),
+    ("Blown assignments", "A player still learning a position sometimes busts: a missed block lets a rusher in "
+     "free, a blown coverage leaves a receiver wide open, a wrong gap opens a running lane, a wrong route kills "
+     "a pass. Unfamiliar players are also flagged more (false starts, holding, offside). Busts are counted in "
+     "his stats."),
+    ("CPU depth charts", "CPU staffs list players at their own positions and cover injuries from other "
+     "positions on game day. Each week they also look for a player who would be overwhelmingly better "
+     "somewhere else than the man starting there, and start him there (shown in the news). Stars get the "
+     "benefit of the doubt, and adaptable head coaches try it sooner."),
     ("Game plan", "Before each game the defensive coordinator scouts the opponent and adjusts: more pressure "
      "against a shaky quarterback, a spy against a runner, a safety rolled toward a star receiver, a loaded "
      "box against a run-first team. Good coordinators read it right; poor ones over- or under-react. Set your "
@@ -281,6 +313,13 @@ COLUMN_DESC = {
     "Bench": "Bench press reps of 225 lb at the combine.",
     "Vert": "Vertical jump at the combine (inches).",
     "Stamina": "How long he can play at full effort before he needs a rest.",
+    "Slot OVR": "His rating at this depth chart slot today: the position's formula on his attributes, adjusted for "
+                "his size and how well he knows the position. At his own position it is his OVR.",
+    "Slot POT": "What he could become at this slot once he has learned it (a scouted range for young players).",
+    "Fit": "Natural at his own position. Elsewhere, how well he knows the position (familiarity 0-100) and "
+           "whether he is light or heavy for it.",
+    "Lock": "Locked players keep their place when the depth chart is auto sorted.",
+    "Busts": "Blown assignments: missed blocks, blown coverages and wrong routes by a player learning a position.",
     # Games and standings
     "GP": "Games played.",
     "GS": "Games started.",

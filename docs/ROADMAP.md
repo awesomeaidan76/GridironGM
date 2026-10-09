@@ -41,6 +41,24 @@ Franchise, NBA 2K MyLeague/MyGM, Draft Day Sports, Pro Strategy Football and Mot
   slider shows what it currently produces in this league next to the NFL figure (BBGM reviews).
   The Glossary screen lists the columns and settings too.
 
+## Depth charts and positions
+The owner set the order of this work in October 2026.
+- ✅ **Anyone at any slot.** Every depth slot (14 positions plus KR and PR) takes any player, rated
+  with that slot's formula on his own attributes, a soft size penalty and a familiarity penalty
+  that shrinks with practice reps and game snaps (Madden-style slot OVR plus FM-style familiarity).
+  Slot POT, a fit breakdown, an "Everyone" toggle, drag and drop, locks, "keep sorted" and a
+  position matrix. The engine plays the slot ratings, and unfamiliar players blow assignments and
+  draw more flags. CPU clubs start an out-of-position player when he is far better (news explains it).
+- 🔜 **Permanent position changes** from the profile and by right-click in the depth chart, CPU
+  conversions with news, a second-position training focus with a staff report, coach trust in
+  conversions, a mild morale effect that depends on personality, CPU two-way use of multi-role stars.
+- 🔜 **Package slots** with their own depth lists (third-down back, power back, slot receiver,
+  nickel corner, sub linebacker, pass-rush ends and tackles), then **game-day inactives** (48 of 53).
+- 💡 The rest of the depth chart GUI ideas: a game-day preview of who takes the field in each
+  personnel group after injuries and rotation; depth warnings fed into the Inbox; "compare at
+  slot" for two players; a staff recommendation with its reason, and delegating the depth chart
+  to the head coach.
+
 ## Later (mostly the Unity port)
 - 💡 Delegation per task: let staff handle the depth chart, re-signings, the practice squad or the
   draft (OOTP, FM). Delegation has to be trustworthy, or it forces players to micromanage.
