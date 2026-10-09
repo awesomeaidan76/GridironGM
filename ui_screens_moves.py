@@ -325,6 +325,11 @@ class TradeScreen(Screen):
         self.verdict = QLabel("Build a trade, then propose it.")
         self.verdict.setWordWrap(True)
         mid.add(self.verdict)
+        helper = QPushButton("What Would Make This Work?")
+        helper.setObjectName("ghost")
+        helper.setToolTip("Find the smallest addition from your side that gets them to say yes")
+        helper.clicked.connect(self._make_it_work)
+        mid.add(helper)
         propose = QPushButton("Propose Trade")
         propose.setObjectName("primary")
         propose.clicked.connect(self._propose)
@@ -440,18 +445,7 @@ class TradeScreen(Screen):
         self.refresh()
 
     def _fill(self, table, team):
-        rows, keys = [], []
-        for p in sorted(team.roster, key=lambda x: (POSITIONS.index(x.position), -x.ca)):
-            tag = " (PS)" if p.ps else " (IR)" if p.ir else ""
-            rows.append([p.name + tag, cell(p.position, POSITIONS.index(p.position)), p.age, ovr_cell(p.ovr),
-                         cell(money(p.salary), p.salary), p.contract_years])
-            keys.append(p.id)
-        for y, r, o in rr.tradable_picks(self.lg, team.abbr):
-            rows.append([cell(rr.pick_label(self.lg, y, r, o, team.abbr) + " pick", color=T("gold")),
-                         cell("PICK", 99), "", cell("", 0), cell("", 0), cell("", 0)])
-            keys.append(f"pick:{y}:{r}:{o}")
-        table.set_rows(rows, keys)
-        table.on_activate = lambda k: None if isinstance(k, str) else self.main.open_player(k)
+        fill_asset_table(self.main, table, team)
 
     def _partner_changed(self):
         self.get.clear()
@@ -506,10 +500,7 @@ class TradeScreen(Screen):
                     lw.takeItem(i)
 
     def _resolve(self, key):
-        if isinstance(key, str) and key.startswith("pick:"):
-            _, y, r, o = key.split(":")
-            return ("pick", int(y), int(r), o)
-        return self.lg.find_player(key)
+        return resolve_key(self.lg, key)
 
     def _players(self, lw):
         out = []
@@ -551,3 +542,249 @@ class TradeScreen(Screen):
         self._clear()
         info(self, "Trade completed", msg)
         self.main.refresh_all()
+
+    def _add_asset(self, target, asset):
+        key = asset_key(asset)
+        for i in range(target.count()):
+            if target.item(i).data(USER_ROLE) == key:
+                return
+        it = QListWidgetItem(asset_text(self.lg, asset))
+        it.setData(USER_ROLE, key)
+        target.addItem(it)
+
+    def _make_it_work(self):
+        import market
+        abbr = self.partner.currentData()
+        if not abbr:
+            return
+        give, get = self._players(self.give), self._players(self.get)
+        if not get:
+            info(self, "What would make this work?", "Ask for a player or pick first.")
+            return
+        extra, msg = market.make_it_work(self.lg, self.lg.teams[abbr], give, get)
+        if extra and confirm(self, "What would make this work?", msg + "\n\nAdd to your side of the deal?"):
+            for a in extra:
+                self._add_asset(self.give, a)
+            self._evaluate()
+        elif not extra:
+            info(self, "What would make this work?", msg)
+
+    def load_deal(self, abbr, give, get):
+        """Open a ready-made deal (from the trading block) for editing."""
+        self.set_partner(abbr)
+        self._clear()
+        for a in give:
+            self._add_asset(self.give, a)
+        for a in get:
+            self._add_asset(self.get, a)
+        self._evaluate()
+
+
+def resolve_key(lg, key):
+    if isinstance(key, str) and key.startswith("pick:"):
+        _, y, r, o = key.split(":")
+        return ("pick", int(y), int(r), o)
+    return lg.find_player(key)
+
+
+def asset_key(asset):
+    if trades.is_pick(asset):
+        _, y, r, o = asset
+        return f"pick:{y}:{r}:{o}"
+    return asset.id
+
+
+def asset_text(lg, asset):
+    if trades.is_pick(asset):
+        return trades.asset_label(lg, asset)
+    return f"{asset.position} {asset.name} ({asset.ovr} OVR, {money(asset.salary)})"
+
+
+def fill_asset_table(main, table, team, block=()):
+    """A club's players and tradable picks, one row each (keys from asset_key)."""
+    lg = main.lg
+    rows, keys = [], []
+    for p in sorted(team.roster, key=lambda x: (POSITIONS.index(x.position), -x.ca)):
+        tag = " (PS)" if p.ps else " (IR)" if p.ir else ""
+        tag += "  ◆" if p.id in block else ""
+        rows.append([p.name + tag, cell(p.position, POSITIONS.index(p.position)), p.age, ovr_cell(p.ovr),
+                     cell(money(p.salary), p.salary), p.contract_years])
+        keys.append(p.id)
+    for y, r, o in rr.tradable_picks(lg, team.abbr):
+        on = "  ◆" if ["pick", y, r, o] in [list(b) for b in block if isinstance(b, (list, tuple))] else ""
+        rows.append([cell(rr.pick_label(lg, y, r, o, team.abbr) + " pick" + on, color=T("gold")),
+                     cell("PICK", 99), "", cell("", 0), cell("", 0), cell("", 0)])
+        keys.append(f"pick:{y}:{r}:{o}")
+    table.set_rows(rows, keys)
+    table.on_activate = lambda k: None if isinstance(k, str) else main.open_player(k)
+
+
+# ── Trading block ─────────────────────────────────────────────────────────────
+
+class TradingBlockScreen(Screen):
+    title = "Trading Block"
+    subtitle = "Put players and picks on the block and ask every club what they would give."
+
+    def __init__(self, main):
+        super().__init__(main)
+        bar = QHBoxLayout()
+        bar.addWidget(QLabel("Offers made of:"))
+        self.kind = "any"
+        chips, _ = filter_chips([("any", "Anything"), ("players", "Players only"), ("picks", "Picks only")],
+                                self._set_kind)
+        bar.addWidget(chips)
+        bar.addStretch(1)
+        ask = QPushButton("Ask Every Club")
+        ask.setObjectName("primary")
+        ask.clicked.connect(self._ask)
+        bar.addWidget(ask)
+        self.outer.addLayout(bar)
+
+        body = QHBoxLayout()
+        body.setSpacing(12)
+        # Roster and block stacked on the left so names and offers both get room to read
+        col = QVBoxLayout()
+        col.setSpacing(12)
+        left = Card("Your Players and Picks")
+        self.mine = DataTable(["Name", "Pos", "Age", "OVR", "Salary", "Yrs"], stretch=0)
+        left.add(self.mine)
+        add = QPushButton("Put on the Block")
+        add.clicked.connect(self._add)
+        left.add(add)
+        col.addWidget(left, 7)
+
+        mid = Card("On the Block")
+        self.block = QListWidget()
+        mid.add(self.block)
+        rm = QPushButton("Take off the Block")
+        rm.clicked.connect(self._remove)
+        mid.add(rm)
+        col.addWidget(mid, 3)
+        body.addLayout(col, 5)
+
+        right = Card("Offers")
+        self.offers_table = DataTable(["Club", "Plan", "They offer", "Value"], stretch=2)
+        self.offers_table.on_activate = lambda _k: self._open_in_trades()
+        right.add(self.offers_table)
+        self.note = QLabel("Put something on the block, then ask every club.")
+        self.note.setObjectName("muted")
+        self.note.setWordWrap(True)
+        right.add(self.note)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        edit = QPushButton("Open in Trades")
+        edit.setObjectName("ghost")
+        edit.clicked.connect(self._open_in_trades)
+        row.addWidget(edit)
+        acc = QPushButton("Accept Offer")
+        acc.setObjectName("primary")
+        acc.clicked.connect(self._accept)
+        row.addWidget(acc)
+        right.body.addLayout(row)
+        body.addWidget(right, 6)
+        self.outer.addLayout(body, 1)
+        self.offers = []
+
+    def refresh(self):
+        import market
+        lg = self.lg
+        assets = market.block_assets(lg)
+        fill_asset_table(self.main, self.mine, self.user, lg.trade_block)
+        self.block.clear()
+        for a in assets:
+            it = QListWidgetItem(asset_text(lg, a))
+            it.setData(USER_ROLE, asset_key(a))
+            self.block.addItem(it)
+        if not assets:
+            self.block.addItem(QListWidgetItem("Nothing on the block."))
+        self._show_offers()
+
+    def _set_kind(self, kind):
+        self.kind = kind
+        self.offers = []
+        self._show_offers()
+
+    def _toggle(self, key, on):
+        import market
+        a = resolve_key(self.lg, key) if key is not None else None
+        if a is None:
+            return
+        refs = [list(r) if isinstance(r, (list, tuple)) else r for r in self.lg.trade_block]
+        ref = list(a) if trades.is_pick(a) else a.id
+        if (ref in refs) != on:
+            market.toggle_block(self.lg, a)
+        self.offers = []
+        self.refresh()
+
+    def _add(self):
+        self._toggle(self.mine.selected_key(), True)
+
+    def _remove(self):
+        it = self.block.currentItem()
+        if it is not None and it.data(USER_ROLE) is not None:
+            self._toggle(it.data(USER_ROLE), False)
+
+    def _ask(self):
+        import market
+        lg = self.lg
+        if not market.block_assets(lg):
+            info(self, "Trading block", "Put a player or pick on the block first.")
+            return
+        deadline = settings["trade_deadline_week"]
+        if (lg.phase == "regular" and lg.week >= deadline) or lg.phase == "playoffs":
+            info(self, "Trading block", "Trades are closed until the season ends.")
+            return
+        self.offers = market.block_offers(lg, self.kind)[:12]
+        self._show_offers(asked=True)
+
+    def _show_offers(self, asked=False):
+        lg = self.lg
+        import market
+        rows, keys = [], []
+        for i, o in enumerate(self.offers):
+            give, _ = market.offer_assets(lg, o)
+            if any(a is None for a in give):
+                continue
+            labels = [trades.asset_label(lg, a) for a in give]
+            rows.append([lg.teams[o["from"]].full_name, o.get("fit", ""),
+                         cell(", ".join(labels), tip="\n".join(labels)),
+                         cell(f"{o['value']:.0f}", o["value"])])
+            keys.append(i)
+        self.offers_table.set_rows(rows, keys)
+        if asked:
+            self.note.setText(f"{len(rows)} clubs made an offer. Value is how much the package is "
+                              f"worth to you. Accept one, or open it in Trades to haggle."
+                              if rows else "No club wants to pay for that. Try different assets or "
+                                           "a different kind of offer.")
+        elif not rows:
+            self.note.setText("Put something on the block, then ask every club.")
+
+    def _selected_offer(self):
+        k = self.offers_table.selected_key()
+        if k is None or not (0 <= k < len(self.offers)):
+            return None
+        return self.offers[k]
+
+    def _accept(self):
+        import market
+        o = self._selected_offer()
+        if o is None:
+            return
+        give, get = market.offer_assets(self.lg, o)
+        if not confirm(self, "Accept offer", f"Send {', '.join(trades.asset_label(self.lg, a) for a in get)} "
+                                             f"to the {self.lg.teams[o['from']].full_name} for "
+                                             f"{', '.join(trades.asset_label(self.lg, a) for a in give)}?"):
+            return
+        ok, msg = market.accept_block_offer(self.lg, o)
+        info(self, "Trade", msg)
+        self.offers = []
+        self.main.refresh_all()
+
+    def _open_in_trades(self):
+        import market
+        o = self._selected_offer()
+        if o is None:
+            return
+        give, get = market.offer_assets(self.lg, o)
+        self.main.goto("trades")
+        self.main.screens["trades"].load_deal(o["from"], get, give)

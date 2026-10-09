@@ -23,7 +23,7 @@ from ui_screens_club import (DepthChartScreen, FinancesScreen, HomeScreen, Inbox
 from ui_screens_league import (GameCenterScreen, HistoryScreen, NewsScreen, PlayersScreen,
                                PlayoffsScreen, ScheduleScreen, StandingsScreen, StatsScreen,
                                TeamsScreen, GlossaryScreen)
-from ui_screens_moves import DraftScreen, FreeAgencyScreen, TradeScreen
+from ui_screens_moves import DraftScreen, FreeAgencyScreen, TradeScreen, TradingBlockScreen
 from ui_theme import T, accent, stylesheet, palette
 from ui_widgets import DataTable, TeamBadge, confirm, info
 
@@ -35,7 +35,8 @@ NAV = [
                 ("stats", "Stats"), ("players", "Players"), ("teams", "Teams"),
                 ("playoffs", "Playoffs"), ("history", "History"), ("news", "News"),
                 ("glossary", "Glossary")]),
-    ("TRANSACTIONS", [("draft", "Draft"), ("fa", "Free Agency"), ("trades", "Trades")]),
+    ("TRANSACTIONS", [("draft", "Draft"), ("fa", "Free Agency"), ("trades", "Trades"),
+                      ("block", "Trading Block")]),
 ]
 
 SCREENS = {
@@ -44,7 +45,7 @@ SCREENS = {
     "schedule": ScheduleScreen, "game": GameCenterScreen, "standings": StandingsScreen,
     "stats": StatsScreen, "players": PlayersScreen, "teams": TeamsScreen,
     "playoffs": PlayoffsScreen, "history": HistoryScreen, "news": NewsScreen,
-    "draft": DraftScreen, "fa": FreeAgencyScreen, "trades": TradeScreen,
+    "draft": DraftScreen, "fa": FreeAgencyScreen, "trades": TradeScreen, "block": TradingBlockScreen,
     "glossary": GlossaryScreen,
 }
 
