@@ -187,6 +187,17 @@ GAMEDAY_DESC = [
      "kicks). He plays one spot per snap: when both of his slots are on the field together he plays the first "
      "(quarterback, line, running back, tight end, receiver; on defense line, linebacker, corner, safety) and "
      "the next man on the other list steps in. Every snap he plays costs energy."),
+    ("Package slots", "Extra depth chart lists for one job inside a personnel group. Offense: Third-Down Back "
+     "(passing downs and the two-minute drill), Power Back (short yardage and the goal line), Slot Receivers "
+     "(the inside men in three- and four-receiver sets) and Jumbo Tight End (the third tight end). Defense: "
+     "Pass-Rush Ends and Tackles (obvious passing downs), Sub Linebackers (who stays on in nickel and dime), "
+     "Nickel and Dime Backs (the fifth and sixth defensive backs) and Third Safety (big nickel and quarter). "
+     "A package player plays its base position, so his familiarity and size there count, and he is rated by "
+     "that job's role formula (a third-down back as a Receiving Back, a nickel back as a Slot Corner). Slot "
+     "receivers, nickel backs, the third safety and the jumbo tight end come on beside the starters: list your "
+     "best receiver first at Slot Receivers and he moves inside. Left alone, each list adds the next best man "
+     "(its starters are listed last), and the third-down and power backs only take over from a lead back who "
+     "is worse at the job."),
     ("Blown assignments", "A player still learning a position sometimes busts: a missed block lets a rusher in "
      "free, a blown coverage leaves a receiver wide open, a wrong gap opens a running lane, a wrong route kills "
      "a pass. Unfamiliar players are also flagged more (false starts, holding, offside). Busts are counted in "
@@ -223,6 +234,19 @@ PLAYBOOK_DESC = [
     ("Offensive systems", "Each coach runs a system: Air Raid, West Coast, Run and Shoot, Spread Option, "
      "Pistol, Pro Style, Air Coryell, Power Run, Zone Run, Wing-T or Flexbone. The system decides which "
      "formations, pass concepts and run schemes get called most (see Tactics → Playbook)."),
+    ("Personnel groups", "Two digits: running backs, then tight ends; the rest of the five skill players "
+     "are receivers. 11 (one back, one tight end, three receivers) is the most common in the NFL; 12 adds a "
+     "second tight end, 21 a fullback, 22 both, 10 is four receivers, 13 is three tight ends (heavy "
+     "play-action and short yardage), 20 is two backs and three receivers (split backs and pony sets), and "
+     "23 is the goal-line jumbo package. Heavy-personnel coaches use more tight ends and fullbacks; up-tempo "
+     "teams stay in 11 and 10."),
+    ("Defensive packages", "The defense sends on its personnel after seeing the offense's (never the play). "
+     "Base (four linemen, three linebackers, four defensive backs; 3-4 teams play three and four) against two "
+     "receivers; Nickel (a fifth defensive back for a linebacker) against three; Big Nickel (a third safety "
+     "instead, to stay big against tight ends: two-high coordinators with a good third safety like it); Dime "
+     "(six defensive backs, one linebacker) against four or more; Quarter (seven defensive backs) for Hail Marys; "
+     "Goal Line (three tackles, two ends, three linebackers) at the goal line. No-huddle offenses keep the "
+     "defense in whatever it had on the field."),
     ("Option football", "On zone read, inverted veer, midline, speed and triple option the quarterback reads an "
      "unblocked defender and gives, keeps or pitches. Smart quarterbacks make the right read more often; "
      "a wrong read is usually a short gain or a loss."),

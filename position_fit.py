@@ -40,10 +40,12 @@ import math
 
 from ratings import (POSITIONS, POSITION_WEIGHTS, MENTAL_ATTRS, PHYSICAL_ATTRS, compute_ca,
                      ovr_from_ca)
+import packages
+from packages import PACKAGE_SLOTS, base_of
 
 # ── Depth-chart slots ─────────────────────────────────────────────────────────
 
-DEPTH_SLOTS = POSITIONS + ["KR", "PR"]
+DEPTH_SLOTS = POSITIONS + ["KR", "PR"] + packages.PACKAGE_ORDER
 RETURN_SLOTS = ("KR", "PR")
 # How many players each slot puts on the field in the base lineup
 STARTERS = {"QB": 1, "RB": 1, "FB": 1, "WR": 3, "TE": 1, "OT": 2, "IOL": 3, "DT": 2,
@@ -137,6 +139,7 @@ def home(p):
 
 def natural(p, slot):
     """True when he plays a slot with no adjustments at all: his own position, fully his."""
+    slot = base_of(slot)
     return slot in RETURN_SLOTS or (slot == p.position and not getattr(p, "converted_from", None))
 
 
@@ -148,6 +151,7 @@ def start_familiarity(own, slot):
 
 def familiarity(p, slot):
     """How well this player knows a slot (0-100). His own position is 100 unless he is still learning it."""
+    slot = base_of(slot)
     if slot in RETURN_SLOTS:
         return 100.0
     fam = getattr(p, "familiarity", None)
@@ -271,6 +275,7 @@ def weight_range(slot):
 
 def size_gap(p, slot, weight=None):
     """(too light, too heavy) in standard deviations beyond the slot's normal range."""
+    slot = base_of(slot)
     if slot == home(p) or slot in NO_SIZE or slot in RETURN_SLOTS:
         return 0.0, 0.0
     from player import SIZE
@@ -280,6 +285,7 @@ def size_gap(p, slot, weight=None):
 
 
 def size_note(p, slot):
+    slot = base_of(slot)
     under, over = size_gap(p, slot)
     from player import SIZE
     if slot not in SIZE:
@@ -304,6 +310,7 @@ def slot_deltas(p, slot, fam=None, weight=None):
     the size fit plus the familiarity penalty. The match engine adds these to
     his attributes on every snap he plays there, and slot ratings use them too.
     """
+    slot = base_of(slot)
     if natural(p, slot):
         return {}
     d = {}
@@ -359,6 +366,8 @@ def converted_ca(p):
 
 def slot_ca(p, slot):
     """Current ability (1-200) at a slot: the slot's formula on his attributes, size and familiarity."""
+    if slot in PACKAGE_SLOTS:
+        return packages.package_ca(p, slot)
     if slot == p.position:
         return p.ca
     return _cached(p, ("ca", slot), lambda: compute_ca(_adjusted(p, slot_deltas(p, slot)), slot))
@@ -433,6 +442,7 @@ def breakdown(p, slot):
 
 def weeks_to_learn(p, slot, team=None):
     """Rough weeks of full reps until he is Accomplished (90) at a slot."""
+    slot = base_of(slot)
     fam = familiarity(p, slot)
     if fam >= 90.0:
         return 0
@@ -450,15 +460,19 @@ def weekly_learning(team, slot_snaps, year, weeks=1.0):
     reps there. weeks > 1 with no snaps is training camp.
     """
     given = {}
-    for slot in POSITIONS:
+    for slot in POSITIONS + packages.PACKAGE_ORDER:
         order = team.depth(slot)
-        n = STARTERS.get(slot, 1)
+        n = STARTERS.get(slot) or packages.starters(slot)
+        base = base_of(slot)
         for i, p in enumerate(order[:n + 2]):
-            if natural(p, slot):
+            if natural(p, base):
                 continue
             reps = PRACTICE_REPS[0] if i < n else PRACTICE_REPS[1] if i == n else PRACTICE_REPS[2]
-            given[(p.id, slot)] = reps
-            add_familiarity(p, slot, learn_rate(p, slot, team) * PRACTICE_SHARE * reps * weeks, year)
+            extra = reps - given.get((p.id, base), 0.0)        # a package's reps are at its base position
+            if extra <= 0:
+                continue
+            given[(p.id, base)] = reps
+            add_familiarity(p, base, learn_rate(p, base, team) * PRACTICE_SHARE * extra * weeks, year)
     for p in team.roster:
         targets = []
         if getattr(p, "converted_from", None):

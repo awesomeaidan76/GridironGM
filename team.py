@@ -7,6 +7,8 @@ from ratings import (POSITIONS, ROSTER_TEMPLATE, ROSTER_MINIMUM, POSITION_VALUE,
                      stars_for)
 from coach import Coach
 from position_fit import STARTERS, RETURN_SLOTS
+import packages
+from packages import PACKAGE_SLOTS
 
 # Auto sort's preference for a player's own position (CA points): someone out of
 # position only goes ahead of a natural player when he is clearly better there
@@ -177,7 +179,7 @@ class Team:
     def depth_score(self, p, slot):
         """How auto sort ranks a player at a slot: his rating there, a small bonus at his own position."""
         v = p.rating_at(slot)
-        if p.position == slot:
+        if p.position == packages.base_of(slot):
             v += NATURAL_BONUS
         if self.tactics is None:
             boost = self.youth_boost
@@ -203,7 +205,10 @@ class Team:
     def slot_pool(self, slot):
         """Everyone who belongs on a slot's list (practice squad aside)."""
         byid = {p.id: p for p in self.roster}
-        pool = [p for p in self.roster if p.position == slot and not p.ps]
+        if slot in PACKAGE_SLOTS:
+            pool = [p for p in self.roster if packages.in_pool(p, slot) and not p.ps]
+        else:
+            pool = [p for p in self.roster if p.position == slot and not p.ps]
         seen = {p.id for p in pool}
         role = self._role(slot)
         for pid in self._listed(slot) + ([role[0]] if role else []):
@@ -243,10 +248,12 @@ class Team:
         """A slot's whole list, injured players included, in game-day order."""
         pool = self.slot_pool(slot)
         if self.depth_auto and self.tactics is not None:
-            auto = sorted(pool, key=lambda p: -self.depth_score(p, slot))
+            auto = self._package_last(slot, sorted(pool, key=lambda p: -self.depth_score(p, slot)))
             return self._locked_order(slot, auto)
         rank = {pid: i for i, pid in enumerate(self._listed(slot))}
         out = sorted(pool, key=lambda p: (rank.get(p.id, 999), -self.depth_score(p, slot)))
+        if not rank:
+            out = self._package_last(slot, out)
         role = self._role(slot)
         if role:
             p = next((q for q in out if q.id == role[0]), None)
@@ -254,6 +261,14 @@ class Team:
                 out.remove(p)
                 out.insert(min(role[1], len(out)), p)
         return out
+
+    def _package_last(self, slot, order):
+        """An "adds" package (slot receivers, nickel backs...) lists the base starters last."""
+        pk = PACKAGE_SLOTS.get(slot)
+        if not pk or not pk[3]:
+            return order
+        on = {p.id for p in self.depth(pk[0])[:packages.BASE_STARTERS[slot]]}
+        return [p for p in order if p.id not in on] + [p for p in order if p.id in on]
 
     def depth(self, pos, include_injured=False):
         """Players at a slot in depth order (the user's order first)."""
@@ -278,6 +293,9 @@ class Team:
         starting somewhere else. Locked players keep their places.
         """
         pool = self.slot_pool(slot)
+        if slot in PACKAGE_SLOTS:
+            auto = self._package_last(slot, sorted(pool, key=lambda p: -self.depth_score(p, slot)))
+            return self._locked_order(slot, auto)
         n = STARTERS.get(slot, 1)
         busy = self.starter_ids(exclude=slot) if busy is None else busy
         natural = sorted((p for p in pool if p.position == slot and _active(p) and not p.is_injured),
@@ -304,7 +322,7 @@ class Team:
         self.depth_overrides[slot] = [p.id for p in self.auto_order(slot)]
 
     def auto_sort_all(self):
-        for slot in POSITIONS:
+        for slot in POSITIONS + packages.PACKAGE_ORDER:
             self.auto_sort(slot)
 
     def two_slot_starters(self):
@@ -320,6 +338,8 @@ class Team:
     def lineup(self, pos, n):
         """n healthy players for a position, borrowing from others if short."""
         out = self.depth(pos)[:n]
+        if pos in PACKAGE_SLOTS:
+            return out                      # a short package list falls back to the base list in the engine
         if len(out) < n:
             used = {p.id for p in out}
             pool = []

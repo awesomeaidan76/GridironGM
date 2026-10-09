@@ -59,7 +59,7 @@ def profile(games=120, seed=1):
             "RPO/g": T["rpo_pass"] / games,
             "gun%": 100 * T["gun_snaps"] / max(1, ptot),
             "11%": 100 * pers.get("11", 0) / ptot,
-            "12+%": 100 * (pers.get("12", 0) + pers.get("21", 0) + pers.get("22", 0)) / ptot,
+            "12+%": 100 * sum(v for k, v in pers.items() if 5 - int(k[0]) - int(k[1]) <= 2) / ptot,
             "10%": 100 * pers.get("10", 0) / ptot,
             "QBrush%": 100 * P["QB_rush"] / max(1, T["rush_att"]),
             "EPA/pl": T["epa"] / max(1, T["epa_plays"]),
