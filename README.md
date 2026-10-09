@@ -16,43 +16,24 @@ On other systems: `pip install PyQt6` then `python main.py`.
 - Continue = Ctrl+Space, Save = Ctrl+S. The Sim menu jumps further ahead.
 - Game menu: Save As, Load, Export League to JSON, Settings.
 
-## Latest changes (version 5)
-```
-Fatigue and substitutions
-   - Every player tires during a game. Linemen and pass rushers tire fastest,
-     quarterbacks barely at all. The sideline and halftime bring them back.
-     Tired players lose speed, strength and technique and get hurt more often.
-     Stamina finally matters at every position. Heat and no-huddle offenses
-     (which stop the defense substituting) wear players down faster.
-   - Coaches rotate on every snap when a fresher backup is the better option.
-     Typical game: starting DTs play about 65-80% of snaps, edge rushers 80-90%,
-     corners and safeties nearly all of them, the lead back about 75%.
-   - Depth Chart: stamina and snap % columns, and a rotation setting for each
-     group (none / light / normal / heavy).
-   - Blowouts: late in the 4th quarter the backups (and the backup QB) play.
-   - Snap counts are tracked for every player (box scores, profiles).
- Defense
-   - New Game Plan screen (My Club > Game Plan): a scouting report on this
-     week's opponent, your coordinator's read, and your own calls: shadow
-     corner, bracket their top target, QB spy, box count, pressure and shell.
-   - AI coordinators scout every opponent the same way. Better coordinators
-     read it right; poor ones over- or under-react.
-   - Halftime (and quarter-break) adjustments for both coordinators, shown in
-     the play-by-play.
-   - Call report: EPA and success rate for each coverage, pressure, front, and
-     for your own pass concepts and runs, all season.
-   - New defensive stats: stops, missed tackles (League Stats > Tackling).
- Ratings
-   - The bottom of the scale is softened: fringe players now read in the 40s
-     instead of the 20s and 30s. Average and elite ratings are unchanged.
- Settings
-   - Match Engine, League, Development and AI settings are now saved with each
-     league (like ZenGM). New sliders: pass/run lean, pace of play, completion
-     rate, rushing efficiency, fatigue build-up, fatigue effect, holdouts.
-     1.0 is the realistic baseline.
- Contracts
-   - Holdouts are rarer: 0-3 a season league-wide.
-```
+## Latest changes (version 6)
+- **Line play.** Every pass rusher is matched against the blocker assigned to him (double teams,
+  chips, blitz pickups); the blocker he beats is charged with the pressure or sack. Run plays pair
+  blockers and defenders at the point of attack. New stats: pressures/sacks allowed, pass-rush win
+  rate, double-team rate, run-block win rate, pancakes, yards before/after contact.
+- **Game grades (0-100)** for every player every game, with season grades. They drive the All-Pro
+  team and awards (linemen are finally judged on how they played).
+- **Situational football.** 4th-down and 2-point calls based on win probability and each coach's
+  aggressiveness (which drifts league-wide with results), two- and four-minute offense, smarter
+  timeouts, spikes, hurried field goals, icing the kicker, onside timing, last-play laterals, and
+  sloppy clock management from poor game managers.
+- **Offense.** Each coordinator has his own situational habits (early downs, short yardage, red zone,
+  shot plays, 3rd-and-long screens and draws), shown on the Game Plan scouting report. Systems now
+  look clearly different (Air Raid ~70% passing from the shotgun, Flexbone ~28%). Quarterbacks work
+  through progressions, spot blitzes, check down or force throws depending on who they are; new
+  QB Decisions stats (time to throw, checkdown %, tight-window %, throwaways).
+
+Version 5: fatigue and rotation, snap counts, defensive game plans, per-league settings.
 
 ## Folders
 - `saves/` careers, autosaves and JSON exports (created on first run)

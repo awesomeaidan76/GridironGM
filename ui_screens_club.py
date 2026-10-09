@@ -1449,6 +1449,25 @@ class GamePlanScreen(Screen):
                 lines.append(f"RB {rb.name} — OVR {rb.ovr}")
             if targets:
                 lines.append("Targets: " + ", ".join(f"{p.name} ({p.position} {p.ovr})" for p in targets))
+            # Their play-calling by situation, against the league average
+            if games:
+                lg_tot = Counter()
+                for wk_res in lg.all_results(include_playoffs=False):
+                    for ab in (wk_res.home, wk_res.away):
+                        for k, v in wk_res.team_stats[ab].items():
+                            if isinstance(k, str) and k.startswith("sit|"):
+                                lg_tot[k] += v
+                parts = []
+                for b in ("1st & 2nd down", "3rd/4th & short", "3rd/4th & medium", "3rd/4th & long", "Red zone"):
+                    n_ = tot[f"sit|{b}|n"]
+                    if n_ >= 8:
+                        mine_p = 100.0 * tot[f"sit|{b}|p"] / n_
+                        lg_p = 100.0 * lg_tot[f"sit|{b}|p"] / max(1, lg_tot[f"sit|{b}|n"])
+                        diff_ = mine_p - lg_p
+                        tag = "" if abs(diff_) < 5 else (" (pass-heavy)" if diff_ > 0 else " (run-heavy)")
+                        parts.append(f"{b}: pass {mine_p:.0f}% vs league {lg_p:.0f}%{tag}")
+                if parts:
+                    lines.append("<b>Tendencies:</b> " + " · ".join(parts))
             self.scout_text.setText("<br>".join(lines))
             dc = dlib.scout(team, opp, oplan, calling=staff_mod.def_calling(team),
                             rng=_r.Random(hash((lg.year, wk, team.abbr))))

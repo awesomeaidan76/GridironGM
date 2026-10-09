@@ -570,7 +570,7 @@ class StandingsScreen(Screen):
 STAT_TABS = [("Passing", "Passing"), ("Rushing", "Rushing"), ("Receiving", "Receiving"),
              ("Defense", "Defense"), ("Kicking", "Kicking"), ("Punting", "Punting"),
              ("Returns", "Returns"), ("AdvPass", "Adv. Passing"), ("AdvRush", "Adv. Rushing"),
-             ("AdvRec", "Adv. Receiving"), ("Grades", "Grades"), ("Blocking", "Blocking"), ("PassRush", "Pass Rush"),
+             ("AdvRec", "Adv. Receiving"), ("QBDecisions", "QB Decisions"), ("Grades", "Grades"), ("Blocking", "Blocking"), ("PassRush", "Pass Rush"),
              ("RunDef", "Tackling"), ("Coverage", "Coverage"),
              ("TeamOff", "Team Offense"), ("TeamDef", "Team Defense"), ("TeamAdv", "Team Advanced")]
 
@@ -1302,6 +1302,9 @@ class GlossaryScreen(Screen):
                                [(k.replace("_", " ").title(), d, "") for k, d in TRAIT_DESC.items()]))
         from glossary import STATS_DESC, PLAYBOOK_DESC, GAMEDAY_DESC
         self.sections.append(("Game day: fatigue, rotation and game plans", [(n, d, "") for n, d in GAMEDAY_DESC]))
+        from glossary import LINE_DESC, COACHING_DESC
+        self.sections.append(("Line play and grades", [(n, d, "") for n, d in LINE_DESC]))
+        self.sections.append(("Coaching decisions and quarterback play", [(n, d, "") for n, d in COACHING_DESC]))
         self.sections.append(("Advanced stats", [(n, d, "") for n, d in STATS_DESC]))
         self.sections.append(("Playbooks and calls", [(n, d, "") for n, d in PLAYBOOK_DESC]))
 

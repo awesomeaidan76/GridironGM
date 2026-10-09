@@ -313,7 +313,7 @@ def main():
     from ui_screens_league import STAT_TABS
     for g, _ in STAT_TABS:
         st._set_group(g)
-        if g in ("AdvPass", "AdvRush", "AdvRec", "PassRush", "TeamAdv", "Grades", "Blocking"):
+        if g in ("AdvPass", "AdvRush", "AdvRec", "PassRush", "TeamAdv", "Grades", "Blocking", "QBDecisions"):
             assert st.table.rowCount() > 0, g
     st.qualified.setChecked(False)
     st.team.setCurrentIndex(2)

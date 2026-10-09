@@ -13,6 +13,7 @@ stay UI-free (see `docs/ARCHITECTURE.md`).
   `python tools/usage.py`.
 - Long-run stability / economy: `tools/longsim.py`, `tools/economy.py`.
 - Expected-points table refit (after big engine changes): `python tools/fit_ep.py`.
+- Offensive system identity (pass rate, depth, personnel, shotgun, QB runs per system): `python tools/schemes.py`.
 - Check several calibrate seeds before trusting a change: league talent landscapes vary a lot.
 
 ## Design rules the owner has set

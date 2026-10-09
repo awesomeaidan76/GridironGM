@@ -10,11 +10,11 @@ points it caused; a play is a "success" when its EPA is positive.
 # 1st-and-10 expected points by yards from the offense's own goal line.
 # Fitted to the match engine with tools/fit_ep.py ("next score" method), then
 # lightly smoothed near the goal lines where samples are thin.
-_EP_POINTS = [(1, -0.75), (5, -0.35), (10, 0.0), (20, 0.55), (25, 0.78), (30, 1.15), (40, 1.78),
-              (50, 2.35), (60, 2.98), (70, 3.68), (80, 4.45), (85, 4.78), (90, 5.05), (95, 5.5),
-              (99, 6.0)]
-DOWN_ADJ = {1: 0.0, 2: -0.57, 3: -1.36, 4: -2.32}
-TOGO_COEF = {1: -0.056, 2: -0.089, 3: -0.095, 4: -0.095}
+_EP_POINTS = [(1, -0.6), (5, -0.3), (10, 0.05), (20, 0.57), (25, 0.77), (30, 1.15), (40, 1.76),
+              (50, 2.32), (60, 2.96), (70, 3.75), (80, 4.5), (85, 4.9), (90, 5.1), (95, 5.6),
+              (99, 6.15)]
+DOWN_ADJ = {1: 0.0, 2: -0.55, 3: -1.3, 4: -2.15}
+TOGO_COEF = {1: -0.05, 2: -0.082, 3: -0.089, 4: -0.08}
 KICKOFF_EP = 0.65            # what the receiving team expects after a kickoff
 
 

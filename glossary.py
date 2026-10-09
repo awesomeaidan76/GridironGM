@@ -162,3 +162,42 @@ PLAYBOOK_DESC = [
      "reverse), punts (spread, directional, rugby, pooch) and the receiving side's calls (return, wall, "
      "block, safe/fake-watch). Better core special-teams players and coaches win the hidden yardage."),
 ]
+
+LINE_DESC = [
+    ("Pass protection", "On every pass each rusher is matched against the blocker assigned to him: tackles take "
+     "the edge rushers, guards the tackles, and spare linemen slide toward the most dangerous rusher (a double "
+     "team). Tight ends and backs chip the edge or pick up blitzers. Power rushers test a blocker's strength, "
+     "speed rushers his feet. The first rusher to win before the ball is out causes the pressure, and the "
+     "blocker he beat is charged with it."),
+    ("Pass-rush win rate", "How often a rusher beats his block, whether or not he reaches the quarterback "
+     "in time. Around 20% is average; 30%+ is elite."),
+    ("Pressures / sacks allowed", "Charged to the blocker who lost the rep. Unblocked rushers and coverage "
+     "sacks are on nobody."),
+    ("Run blocking", "Blockers at the point of attack are paired with the defenders there. Win your block and "
+     "the runner has room (yards before contact); lose it and the defender wins the rep. A dominant win is a pancake."),
+    ("YBC / YAC (rushing)", "Yards before contact, created by the blocking, and yards after contact, created "
+     "by the runner."),
+    ("Game grade (0-100)", "How well a player did his job on the snaps he played, compared with an average player "
+     "at his position: blocks won and lost, pressures, coverage reps, tackles and misses, catches over expectation, "
+     "EPA as a passer and so on. 90+ elite, 80-89 high quality, 70-79 above average, 60-69 average, under 50 poor. "
+     "Season grades are snap-weighted. Grades feed the All-Pro team and awards."),
+]
+
+COACHING_DESC = [
+    ("4th down and 2-point decisions", "Coaches compare win probability for going for it, punting and kicking "
+     "(and for one or two points after a touchdown), then lean on their own temperament: aggressive coaches go "
+     "for it on closer calls, cautious ones kick unless the numbers are clear. If going for it keeps working "
+     "around the league, coaches get bolder over the years."),
+    ("Two-minute and four-minute offense", "Trailing late, offenses hurry, get out of bounds, use timeouts "
+     "when the clock is running and spike the ball when they have none left. Leading late, they run, stay in "
+     "bounds and take the play clock down. Poor game managers lose seconds and waste timeouts."),
+    ("Situational tendencies", "Each offensive coordinator has his own habits: early-down passing, short-yardage "
+     "and red-zone calls, shot plays on 1st down, screens and draws on 3rd & long. The Game Plan screen compares "
+     "your opponent's habits with the league."),
+    ("Quarterback progressions", "The quarterback works his reads in order. Better processors see the "
+     "coverage more clearly and get through more reads; gunslingers throw into tighter windows, careful "
+     "quarterbacks take the checkdown or throw it away. Every extra read gives the pass rush more time. "
+     "Against a blitz, a sharp quarterback spots it and throws hot."),
+    ("Time to throw / tight window %", "Average seconds from snap to throw, and the share of throws into "
+     "tight coverage (the receiver was not open)."),
+]

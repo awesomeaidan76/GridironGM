@@ -175,7 +175,7 @@ class Side:
         rb1 = rbs[0]
         rb2 = rbs[1] if len(rbs) > 1 else None
         c = self.plan.get("committee", 0.45)
-        share = 1.01 - 0.30 * c
+        share = 1.04 - 0.30 * c
         if rb2 is not None:
             gap = rb1.rating_at("RB") - rb2.rating_at("RB")
             share += max(-0.14, min(0.16, gap / 65.0))
@@ -1943,6 +1943,16 @@ class GameSim:
         probs = trenches.contest_pass(e, prot, PASS_RUSH_BASE, time_req, stunt=stunt)
         probs = [(_sig(math.log(max(1e-6, p) / max(1e-6, 1 - p)) + edge_add / 15.0), mg + edge_add)
                  for p, mg in probs]
+        # Offenses scheme help toward a rusher who is wrecking games this season
+        adj = []
+        for x, (pp, mg) in zip(prot, probs):
+            ss_ = x["rusher"].season_stats
+            gp_ = ss_.get("gp", 0)
+            if gp_ >= 4:
+                spg = ss_.get("sacks", 0) / gp_
+                pp = pp / (1.0 + max(0.0, spg - 0.55) * 0.9)
+            adj.append((pp, mg))
+        probs = adj
         win_m, all_wins = trenches.resolve_pass_rush(e, prot, probs)
         pressured = win_m is not None
         self._prot_record(prot, all_wins, win_m)
@@ -2169,7 +2179,7 @@ class GameSim:
                 pr *= 0.55
             out.append((t, "TE1" if i == 0 else "TE2", pr))
         if rb:
-            pr = 2.0 * (0.45 + 0.55 * rb.a("catching") / 65.0)
+            pr = 1.85 * (0.45 + 0.55 * rb.a("catching") / 65.0)
             if ptype == "screen":
                 pr *= 2.6
             elif ptype == "medium":

@@ -52,6 +52,15 @@ def _pct(v):
 
 # Advanced groups take (stat line, context); context["team_tgt"] = team targets
 ADV_GROUPS = {
+    "QBDecisions": (["Dropbacks", "Time to Throw", "Checkdown %", "Tight Window %", "Throwaways", "Hot Reads"],
+                    lambda s, c: [s["dropbacks"],
+                                  cell(f"{s['ttt'] / s['ttt_n']:.2f}s" if s["ttt_n"] else "—",
+                                       s["ttt"] / max(1, s["ttt_n"])),
+                                  cell(_pct(100.0 * s["checkdowns"] / max(1, s["pass_att"])),
+                                       s["checkdowns"] / max(1, s["pass_att"])),
+                                  cell(_pct(100.0 * s["tight_windows"] / max(1, s["pass_att"])),
+                                       s["tight_windows"] / max(1, s["pass_att"])),
+                                  s["throwaways"], s["audibles"]]),
     "AdvPass": (["Dropbacks", "EPA", "EPA/DB", "Success", "aDOT", "CAY/Cmp", "Pressured", "1st Dn", "Rate"],
                 lambda s, c: [s["dropbacks"], cell(f"{s['pass_epa']:+.1f}", s["pass_epa"]),
                               cell(_f2(adv.epa_per_dropback(s)), adv.epa_per_dropback(s), bold=True),
@@ -121,7 +130,7 @@ ADV_GROUPS = {
 }
 
 POSITION_GROUPS = {
-    "QB": ["Passing", "AdvPass", "Rushing"], "RB": ["Rushing", "AdvRush", "Receiving"],
+    "QB": ["Passing", "AdvPass", "QBDecisions", "Rushing"], "RB": ["Rushing", "AdvRush", "Receiving"],
     "FB": ["Rushing", "Receiving", "Blocking"], "WR": ["Receiving", "AdvRec", "Rushing"],
     "TE": ["Receiving", "AdvRec", "Blocking"], "OT": ["Blocking"], "IOL": ["Blocking"], "DT": ["Defense", "PassRush", "RunDef"],
     "EDGE": ["Defense", "PassRush", "RunDef"], "LB": ["Defense", "RunDef", "Coverage"],
@@ -165,6 +174,7 @@ LEADERBOARDS = {
     "PassRush": ("Pass rush", lambda s, g: s["pressures"] >= max(1, g) * 0.8, "Pressures"),
     "RunDef": ("Tackling", lambda s, g: total_tackles(s) >= max(1, g) * 2, "Stops"),
     "Grades": ("Grades", lambda s, g: s["grade_n"] >= max(1, g) * 25, "Grade"),
+    "QBDecisions": ("QB decisions", lambda s, g: s["dropbacks"] >= max(1, g) * 14, "Dropbacks"),
     "Blocking": ("Blocking", lambda s, g: s["pb_snaps"] + s["rb_snaps"] >= max(1, g) * 25, "Pass Pro"),
     "Coverage": ("Coverage", lambda s, g: s["tgt_allowed"] >= max(1, g) * 2.5, "Tgt"),
 }

@@ -81,7 +81,23 @@ archetype's modifiers (`ratings._role_weights`).
    coverage and shell leans, box count, QB spy, bracket target, shadow corner, with errors that shrink with
    the coordinator's rating. The user's Game Plan choices override it. At quarter breaks (mostly halftime)
    `defense.adjust` leans the defence against what is working and the offence leans toward it.
-5. **Momentum** is a single value from -1 to +1 that shifts on big plays and turnovers, then fades. It nudges effective attributes, scaled by each player's temperament.
+5. **Line play** (`trenches.py`). Pass protection assigns every rusher a blocker (tackles on edges,
+   guards on interior rushers, spare linemen slide toward the most dangerous rusher, TEs/backs chip or pick up
+   blitzers); each matchup is a one-on-one won on the two players' attributes, with more time for the rush on
+   longer-developing plays (`PASS_RUSH_BASE` calibrates the pressure rate). The first winner is the pressure
+   and the beaten blocker is charged. Run blocking pairs blockers and defenders at the point of attack (and on
+   the backside); the average margin is the blocking edge `bd`.
+6. **Quarterback decisions.** `_progression` orders the concept's reads, the QB perceives openness with noise
+   that shrinks with decision making, throws when a read clears his threshold (gunslingers lower, later reads
+   lower), else checks down, forces it or throws it away. Each extra read adds time for the rush. Smart QBs
+   spot blitzes pre-snap and throw hot.
+7. **Situations** (`situations.py`). A win-probability model (lead, time, expected points of the possession,
+   pre-game edge) drives 4th-down and 2-point decisions, bent by each coach's aggression and game management
+   (`FOURTH_CAUTION`, `TWO_CAUTION`). Timeouts, spikes, onside timing and the two-/four-minute clock are
+   decided there too. Coaches' aggression drifts with league-wide 4th-down results (`eras.adapt_coaching`).
+8. **Grades** (`grades.py`) turn each game's stat line into a 0-100 grade per player (per-position baseline and
+   scale in `POS_NORM`), stored merge-safely as `grade_pts`/`grade_n`.
+9. **Momentum** is a single value from -1 to +1 that shifts on big plays and turnovers, then fades. It nudges effective attributes, scaled by each player's temperament.
 
 Every probability in the engine has a **calibration constant**. The NFL
 targets are checked by `tools/calibrate.py` (league averages) and
