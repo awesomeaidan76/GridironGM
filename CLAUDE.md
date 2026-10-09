@@ -13,7 +13,8 @@ stay UI-free (see `docs/ARCHITECTURE.md`).
   `python tools/usage.py`.
 - Long-run stability / economy: `tools/longsim.py`, `tools/economy.py`.
 - The 100-season test: `python tools/century.py 100 <seed>` (~27 min; writes one JSON line per season,
-  then a decade-by-decade report; `--report file.jsonl` re-prints it). Run two seeds in parallel.
+  then a decade-by-decade report including front-office plans, GM styles and firings and the MVP/OPOY
+  spread; `--report file.jsonl` re-prints it). Run two seeds in parallel.
 - Expected-points table refit (after big engine changes): `python tools/fit_ep.py`.
 - Offensive system identity (pass rate, depth, personnel, shotgun, QB runs per system): `python tools/schemes.py`.
 - Check several calibrate seeds before trusting a change: league talent landscapes vary a lot.
@@ -36,8 +37,13 @@ stay UI-free (see `docs/ARCHITECTURE.md`).
 - End goal: deep enough that one week can take an hour, and still engaging over 100+ seasons.
 
 ## Conventions
-- Plain data tables + small functions for anything the C++ port will need (playbook.py,
-  defense.py, specialteams.py, advanced.py, negotiation.py).
+- Plain data tables + small functions for anything the port will need (playbook.py,
+  defense.py, specialteams.py, advanced.py, negotiation.py, front_office.py).
+- CPU decisions (trades, draft, free agency, re-signing, hiring/firing) go through
+  front_office.py: owner -> GM personality -> team plan -> one valuation. Add new AI behaviour
+  there rather than as ad-hoc rules, and keep it visible to the user (Teams -> Front Offices, news).
+- The port target is now Unity (C#, UI Toolkit), after the "brains" are finished.
+- QoL ideas from the sports-sim research live in docs/ROADMAP.md.
 - New saved attributes need defaults for old saves (class attributes on Player/Team,
   `League.__init__` defaults are merged in `League.__setstate__`).
 - Keep `docs/ARCHITECTURE.md` and the in-game glossary up to date with sim changes.

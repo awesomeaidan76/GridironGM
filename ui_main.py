@@ -190,6 +190,7 @@ class MainWindow(QMainWindow):
         sm.addAction("Sim to end of regular season").triggered.connect(lambda: self.sim("regular"))
         sm.addAction("Sim through the playoffs").triggered.connect(lambda: self.sim("playoffs"))
         sm.addAction("Sim 4 weeks").triggered.connect(lambda: self.sim("weeks4"))
+        sm.addAction("Sim to the trade deadline").triggered.connect(lambda: self.sim("deadline"))
         sm.addSeparator()
         sm.addAction("Sim to next season (auto offseason)").triggered.connect(lambda: self.sim("season"))
         sm.addAction("Sim 5 full seasons (auto)").triggered.connect(lambda: self.sim("season5"))
@@ -477,23 +478,43 @@ class MainWindow(QMainWindow):
                                                    "handled automatically for your team."):
                 return
 
+        def step():
+            """One week; returns a stop message if something needs the user."""
+            snap = season_mod.sim_snapshot(lg)
+            season_mod.advance(lg)
+            return season_mod.sim_stop_reason(lg, snap)
+
         def work(emit):
             if target == "regular":
                 while lg.phase == "regular":
                     emit(f"Simulating week {lg.week + 1}…")
-                    season_mod.advance(lg)
+                    why = step()
+                    if why and lg.phase == "regular":
+                        return why
                 return "Regular season complete."
+            if target == "deadline":
+                deadline = settings["trade_deadline_week"]
+                while lg.phase == "regular" and lg.week + 1 < deadline:
+                    emit(f"Simulating week {lg.week + 1}…")
+                    why = step()
+                    if why:
+                        return why
+                return f"Trade deadline week: {lg.week_label}."
             if target == "weeks4":
                 for _ in range(4):
                     if lg.phase != "regular":
                         break
                     emit(f"Simulating week {lg.week + 1}…")
-                    season_mod.advance(lg)
+                    why = step()
+                    if why:
+                        return why
                 return f"Simulated to {lg.week_label}."
             if target == "playoffs":
                 while lg.phase in ("regular", "playoffs"):
                     emit(f"Simulating {lg.week_label}…")
-                    season_mod.advance(lg)
+                    why = step()
+                    if why and lg.phase in ("regular", "playoffs"):
+                        return why
                 return f"{lg.year} season complete. Champion: {lg.teams[lg.champion].full_name}."
             seasons = 5 if target == "season5" else 1
             for i in range(seasons):

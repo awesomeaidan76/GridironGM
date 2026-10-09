@@ -362,7 +362,8 @@ def _morale_word(m):
 
 NEWS_COLORS = {"Injury": "bad", "Championship": "gold", "Awards": "gold", "Hall of Fame": "gold",
                "Trade": "info", "Signing": "info", "Release": "warn", "Coaching": "warn",
-               "Draft": "info", "Performance": "good", "Development": "good"}
+               "Draft": "info", "Performance": "good", "Development": "good", "Shortlist": "info",
+               "Front Office": "warn"}
 
 
 def news_html(items):
@@ -1124,8 +1125,13 @@ class StaffScreen(Screen):
         o = team.owner
         patience = "very patient" if o.patience >= 15 else "patient" if o.patience >= 10 else \
             "impatient" if o.patience >= 6 else "ruthless"
+        import front_office as fo
+        fo.owner_traits(o)
+        otype = fo.owner_type(o)
         self.owner_text.setText(
-            f"<b>{o.name}</b> · {patience} · ambition {o.ambition}/20<br>"
+            f"<b>{o.name}</b> · {patience} · ambition {o.ambition}/20 · spending {o.spending}/20 · "
+            f"meddling {o.meddling}/20<br>"
+            f"<b>{otype}</b>: {fo.OWNER_TYPES[otype]}<br>"
             f"Goal for {exp.get('year', self.lg.year)}: <b>{exp.get('label', '—')}</b>"
             f" (around {exp.get('wins', '?')} wins)<br>"
             f"Your reputation around the league: <b>{g['reputation']}</b>/100")

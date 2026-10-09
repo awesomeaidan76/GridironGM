@@ -80,6 +80,9 @@ SPEC = {
 
     # ── Game ─────────────────────────────────────────────────────────────────
     "watch_games":         (True, "Game", "Watch your games live (Continue)", "bool", None),
+    "sim_stop_injury":     (True, "Game", "Multi-week sims stop when one of your starters is hurt (3+ weeks)",
+                            "bool", None),
+    "sim_stop_offer":      (True, "Game", "Multi-week sims stop when a club makes you a trade offer", "bool", None),
     "watch_speed":         (5, "Game", "Live game speed (1 slow - 10 fast)", "int", (1, 10, 1)),
     "gm_can_be_fired":     (True, "Game", "The owner can fire you", "bool", None),
     "auto_roster_moves":   (True, "Game", "Staff handle injured reserve and the practice squad for you", "bool", None),

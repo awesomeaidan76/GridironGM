@@ -258,7 +258,8 @@ def estimate(lg, team, p):
     sk_ca = _scout_skill(team, region, "ca")
     sk_pa = _scout_skill(team, region, "pa")
     err_ca = 2.0 + (1.0 - k) * 14.0 + (20 - sk_ca) * 0.25
-    err_pa = 4.0 + (1.0 - k) * 22.0 + (20 - sk_pa) * 0.45
+    err_pa = (4.0 + (1.0 - k) * 22.0 + (20 - sk_pa) * 0.45) * {"Raw": 1.3, "Normal": 1.0,
+                                                               "Polished": 0.8}[p.dev_profile()]
     rng = random.Random(zlib.crc32(f"{team.abbr}:{p.id}".encode()))
     z1, z2 = rng.gauss(0, 1), rng.gauss(0, 1)
     # Knowledge shrinks the error *and* the bias of the estimate

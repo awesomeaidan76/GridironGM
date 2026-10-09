@@ -154,6 +154,8 @@ class League:
         self.salary_cap = settings["salary_cap"]
         self.pipeline = {}
         self.pipeline_drift = {}
+        self.pipeline_wave = {}    # slow generational talent tides by position group (eras.evolve)
+        self.style_drift = {"pass": 0.0}   # the league's slowly drifting football culture
         self.prestige_history = []
         self.prestige_baseline = None
         self.ratio_ema = None
@@ -184,6 +186,8 @@ class League:
         # Front offices (front_office.py)
         self.gm_pool = []          # general managers out of work
         self.fo_log = []           # (year, "offseason"/"midseason", {abbr: plan})
+        self.shortlist = []        # player ids the user is watching
+        self.shortlist_state = {}  # pid -> (team, injured) at the last check
 
     def strength_order(self):
         """Team abbreviations from strongest to weakest roster (cached until something changes)."""

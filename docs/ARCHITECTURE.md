@@ -184,8 +184,10 @@ weekly, in `_post_week` (plus single-game records after every game):
 
 At `end_season`:
 - awards are given and history is recorded;
+- front offices review the season (GM records, draft learning, owner sales, GM firings and hirings);
 - the coaching carousel runs (coordinators can be promoted to head coach);
 - contracts tick down;
+- every CPU club sets its plan for the coming year;
 - **eras evolve** (talent pipelines, coaching adaptation, scarcity feedback);
 - **the competition committee meets**;
 - the combine takes place;
@@ -193,12 +195,62 @@ At `end_season`:
 - staff turn over;
 - the **owner reviews** the season and may fire you.
 
+## 4b. Front offices: `front_office.py`
+
+Every CPU club has three decision makers, all plain data plus small functions:
+
+- **Owner** (`staff.Owner` plus `owner_traits`): patience, ambition, spending and meddling (1-20). Labelled with an owner type (Win-at-All-Costs, Patient Steward, Penny-Pincher, Meddler, Hands-Off, Showman, Trigger-Happy, Traditionalist). Each club also has a power structure: GM-led, Coach-led or Owner-run.
+- **General manager** (`GM`): 12 traits (0-1) seeded from one of 12 archetypes (`GM_ARCHETYPES`) plus noise. Judgement (1-20) is kept separate from style. The GM also carries a career record, draft picks and `pos_belief`, which is learned from his own draft hits and misses.
+- **Head coach**: a style label from his strongest rating, and `youth_trust`, which nudges close depth-chart calls toward young players.
+
+**Plans** (`PLANS`):
+- Each plan sets multipliers on pick, youth and veteran value, appetite to buy and sell, free-agent spending and playing time for the kids.
+- `choose_plan` scores every plan from an assessment of the club: roster rank, last record, core age, young starters, stars, QB status, next year's cap load, owner mood and GM traits.
+- It adds noise and hysteresis (the current plan gets a bonus, more while it is committed).
+- Plans are set after each season and reviewed two weeks before the trade deadline (`update_plans`).
+
+**One valuation feeds every decision:**
+- `player_mult` covers age by plan and trait, position value, stars or depth, loyalty to his own players, QB search, injury risk, coach-led scheme fit and a hot-seat veteran bias, plus a judgement error that stays fixed for the season.
+- Position value blends a traditional table with an analytics table and leans with the league's pass rate. Analytics GMs read the last three seasons; old-school GMs read the last fifteen.
+- `pick_mult` uses the plan and patience. `demand` uses hardness.
+
+**Where the valuation is used:**
+- `trades.trade_value` and `evaluate`: the CPU side values what it gives up through its own eyes.
+- `market.py`:
+  - buyers and sellers are chosen by plan and activity;
+  - blockbusters for stars by all-in clubs;
+  - salary dumps by clubs resetting their cap;
+  - gamblers trade up, analytics GMs trade down;
+  - both sides must agree.
+- `draft.board_value`: risk weights ceiling over polish, the BPA trait weights need, and QB search adds weight to quarterbacks.
+- Draft-day trade-downs and trade-ups.
+- `free_agency.ai_free_agency_wave`:
+  - spend factor (plan × owner wallet × GM);
+  - star-chasers go after the top names;
+  - value hunters chase bargains;
+  - rebuilders skip 29+;
+  - analytics GMs protect compensatory picks.
+- `ai_resign`: loyalty, cap discipline and plan age limits.
+- `hire_coach`: a slate of candidates, scored by `coach_fit`.
+- Coach firing: owner patience, rebuild grace, and new GMs bringing their own coach.
+
+**Seasonal review** (`season_end`):
+- GM records are updated.
+- Draft learning: picks from four drafts ago are graded against the same round.
+- Copycat drift toward the champion's GM.
+- Owner sales (2% a year).
+- The GM carousel: firing by owner patience and ambition. Replacements come from the pool, a successful front office's lieutenant, or a new archetype weighted by recent champions, the owner's taste, scarcity, and contrast with the man who failed.
+
+Settings: `gm_hot_seat` and `ai_personality_strength`, alongside the existing AI sliders.
+
 ## 5. How eras emerge (no presets)
 
 - `eras.evolve`:
   - Each position group's talent pipeline drifts. Kids chase prestige (fame plus money relative to a long-run baseline). Scarcity pulls the other way: thin positions attract talent.
   - Archetype popularity follows success.
   - `adapt_coaching` moves every coach's pass lean toward whatever is more efficient (net yards per attempt vs yards per carry). Defenses answer pass-heavy leagues with two-high shells, which soften run defense.
+- Slow drift: each group also has a generational wave (`pipeline_wave`, a very persistent random walk), and the league's football culture (`style_drift`) drifts with what has been working. Coaches settle back toward their scheme *plus* that culture, so a passing (or running) generation can last decades.
+- Front offices: analytics GMs re-value positions as the league changes, and GM styles spread when they win titles and fade when they fail (see 4b).
 - `committee.review` changes rules (downfield contact, QB protection, holding, kickoff touchbacks) when scoring dries up or quarterbacks keep getting hurt.
 - Coaching trees: successful coaches' assistants get hired elsewhere and take their mentor's tendencies with them. Innovators counter the trend.
 

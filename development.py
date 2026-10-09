@@ -363,7 +363,8 @@ def _drift_potential(player, team, last_season, surprise):
         mu += (share - 0.4) * 1.5
     if weeks_missed >= 8:
         mu -= 1.5
-    sd = 1.0 + min(8.0, years) * 0.75
+    from player import DEV_SWING
+    sd = (1.0 + min(8.0, years) * 0.75) * DEV_SWING[player.dev_profile()]
     d = random.gauss(mu - 0.6, sd)           # centred so the league's ceiling doesn't creep up
     if d > 0 and player.pa >= 160:
         d *= 0.5                             # the very top is hard to raise further
@@ -384,11 +385,13 @@ def develop(player, team, last_season=None):
     ev = getattr(player, "season_eval", None) or {}
     surprise = (ev.get("prod_pct", 0.5) - ev.get("ca_pct", 0.5)) if ev.get("year") == last_season else 0.0
     _drift_potential(player, team, last_season, surprise)
-    if age <= grow - 1 and random.random() < (0.02 + max(0.0, surprise) * 0.05) * settings["breakout_rate"]:
+    from player import DEV_SURPRISE
+    swing = DEV_SURPRISE[player.dev_profile()]
+    if age <= grow - 1 and random.random() < (0.02 + max(0.0, surprise) * 0.05) * settings["breakout_rate"] * swing:
         bump = random.randint(4, 15)
         player.pa = min(200, player.pa + bump)
         note = "breakout"
-    elif age <= grow - 2 and random.random() < (0.03 + max(0.0, -surprise) * 0.04) * settings["bust_rate"]:
+    elif age <= grow - 2 and random.random() < (0.03 + max(0.0, -surprise) * 0.04) * settings["bust_rate"] * swing:
         player.pa = max(player.ca, player.pa - random.randint(8, 25))
         note = "bust"
 

@@ -270,6 +270,10 @@ def main():
         step(f"player dialog {p.position}")
     td = ui_dialogs.TeamDialog(win, lg.team_list()[7])
     step("team dialog")
+    ui_dialogs.TeamDialog(win, lg.user_team)
+    html = ui_dialogs.front_office_html(lg, next(t for t in lg.team_list() if t.abbr != lg.user_abbr))
+    assert "General Manager" in html and "Plan:" in html, html
+    step("front office views")
     sdlg = ui_dialogs.SettingsDialog(win)
     on_exec(sdlg)
     step("settings dialog")
@@ -416,6 +420,11 @@ def main():
     win.trade_for(other)
     step("trade_for")
 
+    # Sim to the deadline (stops on injuries / offers), then the rest without stops
+    win.sim("deadline")
+    step(f"sim to deadline: {lg.week_label}")
+    settings_mod.settings.set("sim_stop_injury", False)
+    settings_mod.settings.set("sim_stop_offer", False)
     # Sim rest of the regular season and playoffs
     win.sim("regular")
     step("sim regular")

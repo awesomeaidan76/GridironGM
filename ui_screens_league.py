@@ -861,6 +861,7 @@ class PlayersScreen(Screen):
             self.team.blockSignals(True)
             self.team.addItem("All teams", None)
             self.team.addItem("Free agents", "FA")
+            self.team.addItem("My shortlist", "SHORT")
             for t in lg.team_list():
                 self.team.addItem(t.full_name, t.abbr)
             self.team.blockSignals(False)
@@ -877,7 +878,9 @@ class PlayersScreen(Screen):
                 continue
             if tf == "FA" and p.team is not None:
                 continue
-            if tf and tf != "FA" and p.team != tf:
+            if tf == "SHORT" and p.id not in (getattr(lg, "shortlist", None) or []):
+                continue
+            if tf and tf not in ("FA", "SHORT") and p.team != tf:
                 continue
             ovr = p.scouted_ovr(scouting)
             if p.age > self.age.value() or ovr < self.min_ca.value():
@@ -904,10 +907,24 @@ class TeamsScreen(Screen):
 
     def __init__(self, main):
         super().__init__(main)
+        self.tabs = QTabWidget()
         self.table = DataTable(["Team", "Conf", "Div", "Record", "OVR", "OFF", "DEF", "QB",
                                 "Head Coach", "Offense", "Defense", "Payroll", "Titles"], stretch=0)
         self.table.on_activate = self.main.open_team
-        self.outer.addWidget(self.table, 1)
+        self.tabs.addTab(self.table, "Teams")
+        fo_w = QWidget()
+        fl = QVBoxLayout(fo_w)
+        fl.setContentsMargins(0, 8, 0, 0)
+        self.fo_note = QLabel()
+        self.fo_note.setObjectName("sub")
+        self.fo_note.setWordWrap(True)
+        fl.addWidget(self.fo_note)
+        self.fo_table = DataTable(["Team", "Plan", "Priorities", "General Manager", "GM Style", "GM Traits",
+                                   "GM Record", "Owner", "Power", "Coach Style"], stretch=5)
+        self.fo_table.on_activate = self.main.open_team
+        fl.addWidget(self.fo_table, 1)
+        self.tabs.addTab(fo_w, "Front Offices")
+        self.outer.addWidget(self.tabs, 1)
 
     def refresh(self):
         lg = self.lg
@@ -922,6 +939,34 @@ class TeamsScreen(Screen):
                          t.coach.def_scheme, cell(money(t.payroll), t.payroll), t.titles])
             keys.append(t.abbr)
         self.table.set_rows(rows, keys)
+        self._front_offices()
+
+    def _front_offices(self):
+        import front_office as fo
+        lg = self.lg
+        fo.ensure(lg)
+        rows, keys = [], []
+        for t in lg.team_list():
+            g = fo.gm_of(t)
+            o = fo.owner_traits(t.owner)
+            mine = t.abbr == lg.user_abbr
+            plan = t.plan or {}
+            rows.append([cell(t.full_name, bold=mine, color=accent() if mine else None),
+                         "—" if mine else fo.plan_of(t), ", ".join(plan.get("focus") or []) if not mine else "",
+                         "You" if g is None else g.name, "" if g is None else g.archetype,
+                         "" if g is None else ", ".join(g.trait_words(3)),
+                         "" if g is None else cell(g.record_str, g.win_pct),
+                         fo.owner_type(o), t.power or "GM-led", fo.coach_style(t.coach)])
+            keys.append(t.abbr)
+        self.fo_table.set_rows(rows, keys)
+        counts = fo.plan_summary(lg)
+        buyers = sum(v for k, v in counts.items() if k in fo.BUYERS)
+        sellers = sum(v for k, v in counts.items() if k in fo.SELLERS)
+        self.fo_note.setText("Every CPU club has an owner, a general manager with his own personality and a "
+                             "plan for the season. Plans: " + ", ".join(f"{k} {v}" for k, v in
+                                                                        sorted(counts.items(), key=lambda kv: -kv[1]))
+                             + f". {buyers} clubs are buying, {sellers} selling. Double-click a club for "
+                               f"its full front-office profile.")
 
 
 # ── Playoffs ──────────────────────────────────────────────────────────────────
@@ -1305,6 +1350,8 @@ class GlossaryScreen(Screen):
         from glossary import LINE_DESC, COACHING_DESC
         self.sections.append(("Line play and grades", [(n, d, "") for n, d in LINE_DESC]))
         self.sections.append(("Coaching decisions and quarterback play", [(n, d, "") for n, d in COACHING_DESC]))
+        from glossary import front_office_desc
+        self.sections.append(("Front offices, plans and owners", [(n, d, "") for n, d in front_office_desc()]))
         self.sections.append(("Advanced stats", [(n, d, "") for n, d in STATS_DESC]))
         self.sections.append(("Playbooks and calls", [(n, d, "") for n, d in PLAYBOOK_DESC]))
 

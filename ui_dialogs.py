@@ -93,6 +93,9 @@ class PlayerDialog(BaseDialog):
         chips.setSpacing(6)
         chips.addWidget(Chip(personality(p)))
         chips.addWidget(Chip(p.development_stage()))
+        if p.years_to_peak() > 0 and p.dev_profile() != "Normal":
+            chips.addWidget(Chip("Raw — hard to project" if p.dev_profile() == "Raw"
+                                 else "Polished — easier to project"))
         if p.injury:
             chips.addWidget(Chip(f"Injured: {p.injury['name']} ({max(0, p.injury['weeks'])} wk)",
                                  T("bad")))
@@ -166,6 +169,19 @@ class PlayerDialog(BaseDialog):
 
         # Actions
         row = QHBoxLayout()
+        if not p.retired:
+            import season as season_mod
+            on = p.id in (getattr(lg, "shortlist", None) or [])
+            self.short_btn = QPushButton("★ On Shortlist" if on else "☆ Add to Shortlist")
+
+            def toggle():
+                now = season_mod.toggle_shortlist(lg, p.id)
+                self.short_btn.setText("★ On Shortlist" if now else "☆ Add to Shortlist")
+            self.short_btn.clicked.connect(toggle)
+            row.addWidget(self.short_btn)
+            cmp_btn = QPushButton("Compare…")
+            cmp_btn.clicked.connect(lambda: CompareDialog(self.main, p).exec())
+            row.addWidget(cmp_btn)
         row.addStretch(1)
         if p.team == lg.user_abbr and not p.retired:
             if p.contract and (p.contract_years <= 1 or p.id in lg.expiring or p.holdout):
@@ -582,6 +598,153 @@ class OfferDialog(BaseDialog):
 
 # ── Team view ─────────────────────────────────────────────────────────────────
 
+class CompareDialog(BaseDialog):
+    """Two players side by side: ratings, contract, this season and every attribute that matters."""
+
+    def __init__(self, main, p, other=None):
+        super().__init__(main, f"Compare — {p.name}", 820, 720)
+        self.lg = main.lg
+        self.p = p
+        lg = self.lg
+        top = QHBoxLayout()
+        top.addWidget(h_label(f"{p.position} {p.name}", "h2"))
+        top.addWidget(QLabel("vs"))
+        self.pick = QComboBox()
+        self.cands = self._candidates()
+        for c in self.cands:
+            where = c.team or "FA"
+            self.pick.addItem(f"{c.position} {c.name} ({where}, {c.age})", c.id)
+        top.addWidget(self.pick, 1)
+        self.root.addLayout(top)
+        self.table = DataTable(["", p.name, "Other", "Edge"], stretch=0, sortable=False)
+        self.root.addWidget(self.table, 1)
+        self.pick.currentIndexChanged.connect(lambda _i: self._fill())
+        if other is not None and other.id in [c.id for c in self.cands]:
+            self.pick.setCurrentIndex([c.id for c in self.cands].index(other.id))
+        self._fill()
+        close = QPushButton("Close")
+        close.clicked.connect(self.accept)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(close)
+        self.root.addLayout(row)
+
+    def _candidates(self):
+        lg, p = self.lg, self.p
+        out = []
+        user = lg.user_team
+        if user is not None:
+            out += sorted((x for x in user.roster if x.position == p.position and x is not p), key=lambda x: -x.ca)
+        out += [lg.find_player(i) for i in (getattr(lg, "shortlist", None) or [])]
+        same = sorted((x for x in lg.all_players(include_fa=True) if x.position == p.position and x is not p),
+                      key=lambda x: -x.ca)
+        out += same[:25]
+        seen, res = set(), []
+        for x in out:
+            if x is not None and x is not p and x.id not in seen:
+                seen.add(x.id)
+                res.append(x)
+        return res
+
+    def _view(self, x):
+        lg = self.lg
+        scouting = lg.user_team.scouting if lg.user_team else 10
+        mine = x.team == lg.user_abbr
+        ovr = x.ovr if mine else x.scouted_ovr(scouting)
+        lo, hi = (x.pot, x.pot) if mine else x.scouted_pot_range(scouting)
+        return ovr, lo, hi
+
+    def _fill(self):
+        from ratings import POSITION_WEIGHTS
+        lg, p = self.lg, self.p
+        if not self.cands:
+            self.table.set_rows([["No one to compare with", "", "", ""]])
+            return
+        o = self.cands[max(0, self.pick.currentIndex())]
+        self.table.setHorizontalHeaderLabels(["", p.name, o.name, "Edge"])
+        rows = []
+
+        def line(label, a, b, better="high", fmt=str):
+            edge = ""
+            if better != "none" and isinstance(a, (int, float)) and isinstance(b, (int, float)) and a != b:
+                win = (a > b) if better == "high" else (a < b)
+                edge = cell(p.name.split()[-1] if win else o.name.split()[-1],
+                            color=T("good") if win else T("bad"))
+            rows.append([label, fmt(a), fmt(b), edge])
+        pa, pl, ph = self._view(p)
+        oa, ol, oh = self._view(o)
+        line("Overall", pa, oa)
+        line("Potential (top of range)", ph, oh)
+        line("Age", p.age, o.age, "low")
+        line("Salary", p.salary, o.salary, "low", lambda v: money(v) if v else "—")
+        line("Years left", p.contract_years, o.contract_years, "none")
+        line("Development", p.development_stage(), o.development_stage())
+        sp, so = p.season_stats, o.season_stats
+        line("This season", summary_line(sp, p.position) or "—", summary_line(so, o.position) or "—")
+        from grades import grade_of
+        gp, go = grade_of(sp), grade_of(so)
+        if gp is not None or go is not None:
+            line("Season grade", round(gp, 1) if gp else 0, round(go, 1) if go else 0)
+        weights = POSITION_WEIGHTS.get(p.position, {})
+        for attr, w in sorted(weights.items(), key=lambda kv: -kv[1]):
+            if w <= 0:
+                continue
+            line(ATTRIBUTES[attr][0], p.attrs.get(attr, 0), o.attrs.get(attr, 0))
+        self.table.set_rows(rows)
+
+
+def _owner_words(o):
+    def word(v, lo, mid, hi):
+        return lo if v <= 6 else hi if v >= 15 else mid
+    return (f"{word(o.patience, 'impatient', 'reasonably patient', 'very patient')}, "
+            f"{word(o.ambition, 'modest goals', 'expects to compete', 'expects titles')}, "
+            f"{word(o.spending, 'tight budget', 'normal budget', 'spends freely')}, "
+            f"{word(o.meddling, 'hands-off', 'occasionally involved', 'meddles constantly')}")
+
+
+def front_office_html(lg, team):
+    """Owner, GM, plan and coach for a club, as rich text (Team view and Teams screen)."""
+    import front_office as fo
+    fo.ensure(lg)
+    o = fo.owner_traits(team.owner)
+    otype = fo.owner_type(o)
+    power = team.power or "GM-led"
+    parts = [f"<h3>Owner: {o.name}</h3>"
+             f"<b>{otype}</b> — {fo.OWNER_TYPES[otype]}<br>"
+             f"<span style='color:{T('muted')}'>{_owner_words(o)}</span><br>"
+             f"Power structure: <b>{power}</b> — {fo.POWER_TYPES[power]}"]
+    g = fo.gm_of(team)
+    if g is None:
+        parts.append("<h3>General Manager: you</h3>The owner judges you against his goal for the "
+                     "season (see Staff → Owner).")
+    else:
+        desc = fo.GM_ARCHETYPES[g.archetype][0]
+        judge = ("Sharp evaluator" if g.judgement >= 15 else "Solid evaluator" if g.judgement >= 10
+                 else "Erratic evaluator")
+        parts.append(
+            f"<h3>General Manager: {g.name} (age {g.age})</h3>"
+            f"<b>{g.archetype}</b> — {desc}<br>"
+            f"Traits: <b>{', '.join(g.trait_words(5)) or 'balanced'}</b> · {judge}<br>"
+            f"With the club since {g.hired} ({g.seasons} seasons, {g.club_record}) · career {g.record_str}"
+            f" · {g.playoffs} playoff trips · {g.titles} titles"
+            + (f" · came from the front office of {g.mentor}" if g.mentor else "") + "<br>"
+            f"Draft record: {fo.draft_record(g)}")
+        plan = team.plan or {}
+        mode = fo.plan_of(team)
+        focus = plan.get("focus") or []
+        hist = plan.get("history") or []
+        parts.append(
+            f"<h3>Plan: {mode}</h3>{fo.PLANS[mode]['desc']}<br>"
+            f"<span style='color:{T('muted')}'>Why: {plan.get('reason', '—')}</span><br>"
+            + (f"Priorities: <b>{', '.join(focus)}</b><br>" if focus else "")
+            + f"On this plan since {plan.get('since', lg.year)}"
+            + (" · earlier: " + ", ".join(f"{m} (until {y})" for y, m in hist[-5:][::-1]) if hist else ""))
+    c = team.coach
+    parts.append(f"<h3>Head Coach: {c.name}</h3><b>{fo.coach_style(c)}</b> · "
+                 f"{c.off_scheme} / {c.def_scheme} · record {c.record_str}")
+    return "".join(parts)
+
+
 class TeamDialog(BaseDialog):
     def __init__(self, main, team):
         super().__init__(main, team.full_name, 1040, 740)
@@ -651,6 +814,18 @@ class TeamDialog(BaseDialog):
             cl.addWidget(AttrBar(COACH_RATING_LABELS[r], c.ratings[r] * 5))
         cl.addStretch(1)
         tabs.addTab(cw, "Head Coach")
+        # Front office
+        fo_w = QScrollArea()
+        fo_w.setWidgetResizable(True)
+        fo_inner = QWidget()
+        fl = QVBoxLayout(fo_inner)
+        fo_lbl = QLabel(front_office_html(lg, team))
+        fo_lbl.setTextFormat(Qt.TextFormat.RichText)
+        fo_lbl.setWordWrap(True)
+        fl.addWidget(fo_lbl)
+        fl.addStretch(1)
+        fo_w.setWidget(fo_inner)
+        tabs.addTab(fo_w, "Front Office")
         # History
         hist = DataTable(["Year", "Record", "PF", "PA", "Result", "Coach"], stretch=5)
         hist.set_rows([[h["year"], f"{h['w']}-{h['l']}" + (f"-{h['t']}" if h['t'] else ""),

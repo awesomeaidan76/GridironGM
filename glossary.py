@@ -98,6 +98,11 @@ RATING_DESC = [
     ("Development", "Each offseason a player grows, holds or declines depending on age, potential, work ethic, "
                     "coaching, playing time, production, injuries, scheme fit, mentors and some luck. Your "
                     "staff's report on his profile explains it — better coaches read it more accurately."),
+    ("Raw / Polished", "How predictable a young player's development is. Raw players (about one in six) keep a "
+                       "wide potential range until they are close to their peak: their ceiling moves more from "
+                       "year to year and they break out or bust more often. Polished players are easier to "
+                       "project — a higher floor and a lower ceiling — and change less. Most players sit in "
+                       "between and are not tagged."),
 ]
 
 STATS_DESC = [
@@ -201,3 +206,40 @@ COACHING_DESC = [
     ("Time to throw / tight window %", "Average seconds from snap to throw, and the share of throws into "
      "tight coverage (the receiver was not open)."),
 ]
+
+
+def front_office_desc():
+    """Owners, GMs, plans and coach styles (built from front_office.py so it never goes stale)."""
+    import front_office as fo
+    out = [("Front offices", "Every CPU club has an owner, a general manager and a head coach. The owner sets the "
+            "budget and decides how long to wait; the GM has a personality and a plan for the season that drive "
+            "his trades, draft board, free agency and re-signings; the coach decides who plays. See Teams → "
+            "Front Offices, or the Front Office tab when you open a club."),
+           ("Plans", "Each offseason, and again two weeks before the trade deadline, a GM chooses a plan from "
+            "where his roster ranks, how old its core is, its quarterback, the cap and his owner's mood. Plans "
+            "stick for a season or two, so a rebuild isn't abandoned after one good month. Buyers (All-In, "
+            "Contend, Last Dance, Playoff Push) trade picks for veterans; sellers (Rebuild, Tank, Retool, Youth "
+            "Movement, Cap Reset) do the opposite.")]
+    for k, v in fo.PLANS.items():
+        out.append((f"Plan: {k}", v["desc"]))
+    for k, (desc, _, _) in fo.GM_ARCHETYPES.items():
+        out.append((f"GM: {k}", desc))
+    for k, (lo, hi, desc) in fo.TRAIT_INFO.items():
+        out.append((f"GM trait: {lo} / {hi}", desc))
+    out.append(("GM judgement", "Separate from his style: how accurately he sizes up players. Sharp evaluators "
+                "rarely misjudge anyone; erratic ones overrate and underrate players in ways that stick for a "
+                "season."))
+    out.append(("Draft record and learning", "Four years after each draft, a GM's picks are compared with the "
+                "players taken in the same round. He trusts positions where he has hit and is warier where he "
+                "has missed. GMs also drift toward the ideas of the latest champion, and owners tend to replace "
+                "a fired GM with someone unlike him, so front-office fashions come and go."))
+    for k, v in fo.OWNER_TYPES.items():
+        out.append((f"Owner: {k}", v))
+    for k, v in fo.POWER_TYPES.items():
+        out.append((f"Power structure: {k}", v))
+    out.append(("Coach styles", "A head coach's style comes from his strongest quality (Offensive or Defensive "
+                "Mastermind, Teacher and Developer, Players' Coach, Game-Day Tactician, Adaptable Problem-Solver, "
+                "Disciplinarian), plus his 4th-down temperament and whether he plays young players or trusts "
+                "veterans. Coaches who trust youth give young players the edge on close depth-chart calls; "
+                "rebuilding clubs play the kids even more."))
+    return out

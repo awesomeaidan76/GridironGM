@@ -16,7 +16,24 @@ On other systems: `pip install PyQt6` then `python main.py`.
 - Continue = Ctrl+Space, Save = Ctrl+S. The Sim menu jumps further ahead.
 - Game menu: Save As, Load, Export League to JSON, Settings.
 
-## Latest changes (version 6)
+## Latest changes (version 7)
+- **CPU front offices with personalities.**
+  - Every CPU club has an owner, a general manager and a head coach.
+  - Owner types: Win-at-All-Costs, Patient Steward, Penny-Pincher, Meddler, Showman, Trigger-Happy and more.
+  - Twelve GM styles: Analytics Disruptor, Draft-and-Develop Builder, Win-Now Aggressor, Old-School Football Man, Wheeler-Dealer, Moneyball Value Hunter, Star Chaser, Loyalist, Boom-or-Bust Gambler, Steady Caretaker, Defense-First Architect and Quarterback Whisperer. Each GM has his own twist on his style.
+  - Coach styles, plus power structures (GM-led, Coach-led, Owner-run).
+- **Team plans.**
+  - Each club picks a plan every offseason and reviews it at the trade deadline: All-In, Contend, Last Dance, Playoff Push, Stay the Course, Retool, Youth Movement, Rebuild, Tank or Cap Reset.
+  - The plan follows from the roster, its age, the quarterback, the cap and the owner.
+  - It drives trades (contenders buy and rebuilders sell, blockbusters, salary dumps, trade-downs), the draft board, free agency, re-signings, who plays and which coach gets hired.
+  - GMs learn from their draft hits and misses. Owners fire GMs and coaches who miss the mark, and front-office fashions spread when they win titles.
+  - See Teams → Front Offices, the Front Office tab on any club, and the news.
+- **Potential.** About one in six young players is *Raw*: his potential range stays wide until he is close to his peak, and he breaks out or busts more often. *Polished* players are easier to project, with a higher floor and a lower ceiling.
+- **Awards.** The MVP is judged against each position's starters, so a dominant receiver, back or pass rusher can win it. Quarterbacks no longer win it almost every year. Offensive Player of the Year is spread across positions.
+- **Slow era drift.** Generational talent waves at each position, and a league football culture that drifts with what keeps working, so passing or running generations can last decades.
+- **Quality of life.** A shortlist with alerts, a player comparison view, sims that stop when a starter is hurt or an offer arrives, and "Sim to the trade deadline". More is planned in `docs/ROADMAP.md`.
+
+## Version 6
 - **Line play.** Every pass rusher is matched against the blocker assigned to him (double teams,
   chips, blitz pickups); the blocker he beats is charged with the pressure or sack. Run plays pair
   blockers and defenders at the point of attack. New stats: pressures/sacks allowed, pass-rush win

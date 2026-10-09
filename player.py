@@ -484,6 +484,21 @@ class Player:
         prime_p = max(grow_p, prime_end + d)
         return grow_p, prime_p, sev
 
+    def dev_profile(self):
+        """
+        How predictable his development is: "Raw" players (about one in six) keep
+        a wide range of outcomes - and a wide scouted potential - until they are
+        close to their peak; "Polished" players are much easier to project (a
+        higher floor and a lower ceiling); the rest sit in between.
+        """
+        prof = getattr(self, "_dev_profile", None)
+        if prof is None:
+            import zlib
+            u = random.Random(zlib.crc32(f"devprof:{self.id}".encode())).random()
+            prof = "Raw" if u < 0.18 else "Polished" if u >= 0.55 else "Normal"
+            self._dev_profile = prof
+        return prof
+
     def years_to_peak(self):
         return max(0.0, self.curve()[0] - self.age)
 
@@ -513,7 +528,10 @@ class Player:
         years = self.years_to_peak()
         if years <= 0 or self.pa - self._ca <= 1:
             return (self._ca, self._ca)
-        err = (2.5 + years * 2.6) * (1.3 - scouting / 20.0 * 0.6)
+        prof = self.dev_profile()
+        if prof == "Raw":
+            years = max(years, min(4.5, years + 2.5))     # stays hard to read for longer
+        err = (2.5 + years * 2.6) * (1.3 - scouting / 20.0 * 0.6) * DEV_RANGE[prof]
         if self.years_pro == 0:
             err *= 1.15
         mid = self.pa + self.scout_noise[1] * err * 0.45
@@ -523,6 +541,13 @@ class Player:
 
     def __repr__(self):
         return f"<{self.position} {self.name} {self.age}y CA{self._ca} PA{self.pa}>"
+
+
+# Width of the scouted potential range by development profile (see Player.dev_profile)
+DEV_RANGE = {"Raw": 1.25, "Normal": 0.90, "Polished": 0.72}
+# How far a player's true ceiling moves each offseason, and how often he breaks out or busts
+DEV_SWING = {"Raw": 1.45, "Normal": 1.0, "Polished": 0.75}
+DEV_SURPRISE = {"Raw": 1.6, "Normal": 1.0, "Polished": 0.6}
 
 
 # ── Generation ────────────────────────────────────────────────────────────────

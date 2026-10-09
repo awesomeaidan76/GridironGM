@@ -11,6 +11,16 @@ ALL_PRO_SLOTS = [("QB", 1), ("RB", 1), ("WR", 3), ("TE", 1), ("OT", 2), ("IOL", 
                  ("EDGE", 2), ("DT", 2), ("LB", 3), ("CB", 2), ("S", 2), ("K", 1), ("P", 1)]
 
 
+# MVP: how far a player stood above the other starters at his position (in standard
+# deviations), weighted by how much the position drives winning, plus team success.
+# Quarterbacks still win most often, but a dominant season anywhere can take it.
+MVP_POS_W = {"QB": 1.05, "RB": 0.95, "WR": 0.88, "TE": 0.75, "EDGE": 0.85, "DT": 0.7,
+             "LB": 0.64, "CB": 0.72, "S": 0.62}
+MVP_QB_BONUS = 0.55          # about 60% of MVPs go to quarterbacks (it was ~95%)
+# Offensive Player of the Year: the most dominant non-lineman season, with little team weight
+OPOY_POS_W = {"QB": 1.0, "RB": 1.02, "WR": 0.92, "TE": 0.85}
+
+
 def def_score(s):
     return (s["sacks"] * 5 + s["def_int"] * 6 + total_tackles(s) * 0.7 + s["pd"] * 1.6
             + s["ff"] * 4 + s["fr"] * 2 + s["tfl"] * 1.5 + s["qb_hits"] * 0.8 + s["def_td"] * 8)
@@ -93,22 +103,29 @@ def compute(lg):
             mu = sum(vals) / len(vals)
             sd = (sum((v - mu) ** 2 for v in vals) / len(vals)) ** 0.5 or 1.0
             pos_stats[pos] = (mu, sd)
-    MVP_POS_W = {"QB": 1.25, "RB": 0.95, "WR": 0.85, "TE": 0.75, "EDGE": 0.8, "DT": 0.75,
-                 "LB": 0.65, "CB": 0.7, "S": 0.6}
-
-    def mvp_score(pt):
+    def z_of(pt):
         v = raw(pt)
         ps = pos_stats.get(pt[0].position)
         if v is None or ps is None:
+            return None
+        return (v - ps[0]) / ps[1]
+
+    def mvp_score(pt):
+        z = z_of(pt)
+        if z is None:
             return -99.0
-        z = (v - ps[0]) / ps[1]
         return z * MVP_POS_W.get(pt[0].position, 0.6) + wpct[pt[1].abbr] * 2.2 \
-            + (0.9 if pt[0].position == "QB" else 0.0)
+            + MVP_QB_BONUS * (pt[0].position == "QB")
     res["MVP"] = best(players, mvp_score)
+
+    def opoy_score(pt):
+        z = z_of(pt)
+        if z is None:
+            return -99.0
+        return z * OPOY_POS_W.get(pt[0].position, 0.8) + wpct[pt[1].abbr] * 0.6
     res["Offensive Player of the Year"] = best(
-        [pt for pt in players if pt[0].position in OFFENSE and pt[0].position not in ("OT", "IOL")],
-        lambda pt: off_score(pt[0].season_stats, pt[0].position)
-        * (0.8 if pt[0].position == "QB" else 1.0) + pt[0].ca * 0.1)
+        [pt for pt in players if pt[0].position in OFFENSE and pt[0].position not in ("OT", "IOL", "FB")],
+        opoy_score)
     res["Defensive Player of the Year"] = best(
         [pt for pt in players if pt[0].position in DEFENSE],
         lambda pt: def_score(pt[0].season_stats) + pt[0].ca * 0.15 + wpct[pt[1].abbr] * 8)

@@ -857,6 +857,12 @@ def fa_next_wave(lg):
 
 def advance(lg):
     """Move the league forward one step. Returns a short description."""
+    msg = _advance(lg)
+    shortlist_alerts(lg)
+    return msg
+
+
+def _advance(lg):
     ph = lg.phase
     if ph == "regular":
         wk = lg.week + 1
@@ -903,6 +909,77 @@ def advance(lg):
         start_new_season(lg)
         return f"The {lg.year} season begins."
     return ""
+
+
+# ── Quality of life: shortlist alerts and sim stop conditions ────────────────
+
+def shortlist_alerts(lg):
+    """News for the user when a shortlisted player changes team, hits free agency or gets hurt."""
+    ids = getattr(lg, "shortlist", None) or []
+    if not ids:
+        return
+    state = getattr(lg, "shortlist_state", None) or {}
+    by_id = {p.id: p for p in lg.all_players(include_fa=True)}
+    user = lg.user_abbr
+    for pid in list(ids):
+        p = by_id.get(pid)
+        if p is None:
+            ids.remove(pid)
+            state.pop(pid, None)
+            continue
+        now = (p.team, bool(p.injury and p.injury.get("weeks", 0) >= 2))
+        before = state.get(pid)
+        if before is not None and before != now:
+            if before[0] != now[0]:
+                if now[0] is None:
+                    lg.add_news("Shortlist", f"{p.position} {p.name} (OVR {p.ovr}) is now a free agent.", user)
+                elif now[0] == user:
+                    pass
+                else:
+                    lg.add_news("Shortlist", f"{p.position} {p.name} has moved to {lg.teams[now[0]].full_name}.",
+                                user)
+            elif now[1] and not before[1]:
+                lg.add_news("Shortlist", f"{p.position} {p.name} is injured ({p.injury['name']}, "
+                                         f"{p.injury['weeks']} weeks).", user)
+        state[pid] = now
+    lg.shortlist_state = state
+
+
+def toggle_shortlist(lg, pid):
+    ids = getattr(lg, "shortlist", None)
+    if ids is None:
+        ids = lg.shortlist = []
+    if pid in ids:
+        ids.remove(pid)
+        return False
+    ids.append(pid)
+    shortlist_alerts(lg)
+    return True
+
+
+def sim_snapshot(lg):
+    """What a multi-week sim watches so it can stop when something needs the user."""
+    team = lg.user_team
+    hurt = set()
+    if team is not None:
+        for pos, players in team.starters().items():
+            hurt.update(p.id for p in players)
+    return {"offers": len(getattr(lg, "trade_offers", []) or []), "starters": hurt}
+
+
+def sim_stop_reason(lg, snap):
+    """Text explaining why a multi-week sim should stop now, or None."""
+    team = lg.user_team
+    if team is None:
+        return None
+    if settings["sim_stop_offer"] and len(getattr(lg, "trade_offers", []) or []) > snap["offers"]:
+        o = lg.trade_offers[-1]
+        return f"Stopped: {lg.teams[o['from']].full_name} have made you a trade offer (see Trades)."
+    if settings["sim_stop_injury"]:
+        for p in team.roster:
+            if p.id in snap["starters"] and p.injury and p.injury.get("weeks", 0) >= 3:
+                return f"Stopped: starter {p.position} {p.name} is out ({p.injury['name']}, {p.injury['weeks']} weeks)."
+    return None
 
 
 def sim_to(lg, target, callback=None):

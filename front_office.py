@@ -232,6 +232,8 @@ def _clamp(v, lo=0.0, hi=1.0):
 # ── People ────────────────────────────────────────────────────────────────────
 
 class GM:
+    club_wins = club_losses = club_ties = 0
+
     def __init__(self, archetype=None, rng=random, base=None):
         self.name = names.random_name()
         self.age = rng.randint(36, 60)
@@ -252,6 +254,7 @@ class GM:
         self.wins = self.losses = self.ties = 0
         self.titles = 0
         self.playoffs = 0
+        self.club_wins = self.club_losses = self.club_ties = 0     # with his current club
         self.mentor = None               # "Name (ABBR)" whose front office he came from
         self.history = []                # [(year, team, record, plan, result)]
         self.picks = []                  # [(year, pid, round, pick, pos)]
@@ -267,6 +270,11 @@ class GM:
     def record_str(self):
         s = f"{self.wins}-{self.losses}"
         return s + (f"-{self.ties}" if self.ties else "")
+
+    @property
+    def club_record(self):
+        s = f"{self.club_wins}-{self.club_losses}"
+        return s + (f"-{self.club_ties}" if self.club_ties else "")
 
     @property
     def win_pct(self):
@@ -525,7 +533,7 @@ def choose_plan(lg, team, initial=False, midseason=False):
             locked = cur.get("commit_until", 0) >= lg.year
             u[held] += 0.40 if locked else 0.15
             if midseason:
-                u[held] += 0.25          # in-season changes need a real surprise
+                u[held] += 0.45          # in-season changes need a real surprise
     mode = max(u, key=u.get)
     if cur and cur["mode"] == mode and not initial:
         plan = dict(cur)
@@ -538,6 +546,10 @@ def choose_plan(lg, team, initial=False, midseason=False):
             "history": list((cur or {}).get("history", []))[-12:]}
 
 
+def _bucket(mode):
+    return "buy" if mode in BUYERS else "sell" if mode in SELLERS else "hold"
+
+
 def update_plans(lg, midseason=False):
     """Every CPU club sets (or reconsiders) its plan. Returns the clubs that changed course."""
     ensure(lg)
@@ -547,6 +559,8 @@ def update_plans(lg, midseason=False):
             continue
         old = plan_of(t)
         new = choose_plan(lg, t, midseason=midseason)
+        if midseason and new["mode"] != old and _bucket(new["mode"]) == _bucket(old):
+            new = dict(t.plan, focus=new["focus"], reason=new["reason"])   # only buy/sell flips mid-season
         if new["mode"] != old:
             new.setdefault("history", []).append((lg.year, old))
             changed.append((t, old, new["mode"]))
@@ -745,6 +759,9 @@ def season_end(lg):
         g.wins += rec.w
         g.losses += rec.l
         g.ties += rec.t
+        g.club_wins += rec.w
+        g.club_losses += rec.l
+        g.club_ties += rec.t
         g.seasons += 1
         g.career_seasons += 1
         g.age += 1
@@ -847,9 +864,9 @@ def _gm_carousel(lg):
         bar = 0.50 + (o.ambition - 10) * 0.012
         p = 0.0
         if g.seasons >= 3 and not titles_recent:
-            p = max(0.0, (bar - recent) * 2.4)
+            p = max(0.0, (bar - recent) * 3.0)
             if apps == 0 and g.seasons >= 5:
-                p += 0.12
+                p += 0.15
             if plan_of(t) in ("Rebuild", "Tank", "Youth Movement") and g.seasons <= 4:
                 p *= 0.5                    # the owner signed off on the rebuild
             # a talented roster that keeps losing is the GM's fault too
@@ -865,7 +882,7 @@ def _gm_carousel(lg):
                                         f"({g.record_str} as a GM, {g.titles} titles).", t.abbr)
         else:
             lg.add_news("Front Office", f"{t.full_name} fire general manager {g.name} after "
-                                        f"{g.seasons} seasons ({g.record_str}).", t.abbr)
+                                        f"{g.seasons} seasons ({g.club_record}).", t.abbr)
             if g.age < 66:
                 g.team = None
                 g.reputation = max(1, g.reputation - 10)
@@ -948,6 +965,7 @@ def hire_gm(lg, team, predecessor=None):
     new.team = team.abbr
     new.hired = lg.year
     new.seasons = 0
+    new.club_wins = new.club_losses = new.club_ties = 0
     lg.add_news("Front Office", f"{team.full_name} hire {new.name} as general manager — {how}. "
                                 f"Style: {new.archetype}.", team.abbr)
     return new
@@ -977,7 +995,7 @@ def coach_fit(lg, team, coach):
 def owner_coach_patience(team):
     """Multiplier on the chance a struggling coach is fired."""
     o = owner_traits(team.owner)
-    f = 1.45 - o.patience * 0.045
+    f = 1.75 - o.patience * 0.05
     if plan_of(team) in ("Rebuild", "Tank", "Youth Movement") and team.plan.get("since", 0) >= 0:
         f *= 0.6
     g = gm_of(team)

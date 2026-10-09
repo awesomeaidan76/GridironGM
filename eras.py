@@ -99,12 +99,18 @@ def adapt_coaching(league):
         mean_aggr = sum(t.coach.tendencies.get("aggression", 0.45) for t in league.teams.values()) / len(league.teams)
         aggr_push = max(-0.03, min(0.03, (conv - 42.0) / 100.0 * 0.30 + (0.45 - mean_aggr) * 0.08
                                    + random.gauss(0, 0.008)))
+    # The league's football culture drifts slowly: ideas that keep working spread through
+    # coaching trees and clinics, and stay in fashion for a generation (with some noise).
+    # Coaches settle back toward their scheme *plus* the culture of their time.
+    style = getattr(league, "style_drift", None) or {"pass": 0.0}
+    style["pass"] = max(-0.30, min(0.30, style["pass"] * 0.97 + off_push * 0.25 + random.gauss(0, 0.014)))
+    league.style_drift = style
     from coach import OFFENSIVE_SCHEMES, DEFENSIVE_SCHEMES
     for team in league.teams.values():
         c = team.coach
         t = c.tendencies
         learn = 0.4 + c.r("adaptability") / 20.0 * 0.6
-        base_off = OFFENSIVE_SCHEMES[c.off_scheme]["pass_lean"]
+        base_off = max(-1.0, min(1.0, OFFENSIVE_SCHEMES[c.off_scheme]["pass_lean"] + style["pass"]))
         t["pass_lean"] = max(-1.0, min(1.0, t["pass_lean"] + off_push * learn))
         t["pass_lean"] = t["pass_lean"] * 0.93 + base_off * 0.07
         # 4th-down boldness follows results: if going for it keeps working around the
@@ -177,7 +183,14 @@ def evolve(league):
         drift = league.pipeline_drift.get(g, 0.0)
         drift = drift * 0.94 + random.gauss(0, 1.1 * vol)
         league.pipeline_drift[g] = max(-10.0, min(10.0, drift))
-        target = demand * 0.6 + drift
+        # Generational waves: a slow tide in how many great athletes a position attracts
+        # (youth-football fashions, a famous star inspiring a generation) lasting decades
+        waves = getattr(league, "pipeline_wave", None)
+        if waves is None:
+            waves = league.pipeline_wave = {}
+        wave = max(-7.0, min(7.0, waves.get(g, 0.0) * 0.975 + random.gauss(0, 0.55 * vol)))
+        waves[g] = wave
+        target = demand * 0.6 + drift + wave
         cur = league.pipeline.get(g, 0.0)
         new = cur * 0.82 + target * 0.18 + random.gauss(0, 1.6 * vol)
         league.pipeline[g] = max(-16.0, min(16.0, new))

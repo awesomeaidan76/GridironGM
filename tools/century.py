@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from season import advance  # noqa: E402
 from worldgen import new_league  # noqa: E402
 import records  # noqa: E402
+import front_office as fo  # noqa: E402
 
 AVG_KEYS = ("ppg", "pass_rate", "pass_att", "comp_pct", "ypa", "ypc", "int_rate", "sack_rate", "fg_pct",
             "plays", "third_pct", "fourth_att", "fourth_conv", "two_att", "turnovers")
@@ -52,11 +53,20 @@ def snapshot(lg, secs, prev_records):
             prev_records[k] = tops[k][0][0]
     trades = sum(1 for y, _w, txt in lg.transactions if y == h["year"] and "trade" in txt.lower())
     mvp = (h.get("awards") or {}).get("MVP") or {}
+    opoy = (h.get("awards") or {}).get("Offensive Player of the Year") or {}
+    news = [n for n in lg.news if n[0] == h["year"]]
+    gms = [t.gm for t in lg.teams.values() if getattr(t, "gm", None) is not None]
     return {
         "year": h["year"], "secs": round(secs, 1), "era": h.get("era", ""),
         "avg": {k: round(a.get(k, 0.0), 3) for k in AVG_KEYS},
         "champion": h.get("champion"), "best": (h.get("best_record") or ("", ""))[0],
-        "mvp_pos": mvp.get("pos"),
+        "mvp_pos": mvp.get("pos"), "opoy_pos": opoy.get("pos"),
+        "plans": fo.plan_summary(lg), "gm_arch": dict(Counter(g.archetype for g in gms)),
+        "gm_fired": sum(1 for n in news if "fire general manager" in n[3]),
+        "hc_fired": sum(1 for n in news if "fire head coach" in n[3]),
+        "champ_plan": fo.plan_of(lg.teams[h["champion"]]) if h.get("champion") in lg.teams else None,
+        "style_drift": round((getattr(lg, "style_drift", None) or {}).get("pass", 0.0), 3),
+        "wave": {k: round(v, 2) for k, v in (getattr(lg, "pipeline_wave", None) or {}).items()},
         "n90": sum(o >= 90 for o in ovrs), "n85": sum(o >= 85 for o in ovrs),
         "ovr_mean": round(st.mean(ovrs), 2), "elite_pos": dict(elite),
         "team_ovr_sd": round(st.pstdev(team_ovr), 2), "team_ovr_range": round(max(team_ovr) - min(team_ovr), 1),
@@ -141,6 +151,19 @@ def report(path):
     print(f"era changes: {changes}")
     mvp = Counter(r["mvp_pos"] for r in rows)
     print(f"MVP by position: {dict(mvp)}")
+    if "opoy_pos" in rows[0]:
+        print(f"OPOY by position: {dict(Counter(r['opoy_pos'] for r in rows))}")
+        band("GMs fired", series(lambda r: r["gm_fired"]), "{:.1f}")
+        band("coaches fired", series(lambda r: r["hc_fired"]), "{:.1f}")
+        band("league style drift", series(lambda r: r["style_drift"]), "{:.2f}")
+        plans = Counter()
+        for r in rows:
+            plans.update(r["plans"])
+        print("plans (avg clubs per season): " + ", ".join(f"{k} {v / n:.1f}" for k, v in plans.most_common()))
+        print(f"champions' plans: {dict(Counter(r['champ_plan'] for r in rows))}")
+        for i in range(0, n, max(1, n // 5)):
+            print(f"GM styles {rows[i]['year']}: {rows[i]['gm_arch']}")
+        print(f"GM styles {rows[-1]['year']}: {rows[-1]['gm_arch']}")
     rb = Counter(k for r in rows for k in r["records_broken"])
     print(f"single-season records broken: {dict(rb)} (total {sum(rb.values())})")
     first, last = rows[0], rows[-1]
