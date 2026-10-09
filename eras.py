@@ -91,6 +91,10 @@ def adapt_coaching(league):
     league.ratio_ema = ema * 0.85 + ratio * 0.15
     pass_rate = avgs.get("pass_rate", 57.0)
     def_push = max(-0.08, min(0.08, (pass_rate - 57.5) / 100.0 * 2.0)) * vol
+    conv = avgs.get("fourth_conv")
+    aggr_push = 0.0
+    if conv is not None and avgs.get("fourth_att", 0) > 0.2:
+        aggr_push = max(-0.03, min(0.03, (conv - 50.0) / 100.0 * 0.25 + random.gauss(0, 0.006)))
     from coach import OFFENSIVE_SCHEMES, DEFENSIVE_SCHEMES
     for team in league.teams.values():
         c = team.coach
@@ -99,11 +103,14 @@ def adapt_coaching(league):
         base_off = OFFENSIVE_SCHEMES[c.off_scheme]["pass_lean"]
         t["pass_lean"] = max(-1.0, min(1.0, t["pass_lean"] + off_push * learn))
         t["pass_lean"] = t["pass_lean"] * 0.93 + base_off * 0.07
+        # 4th-down boldness follows results: if going for it keeps working around the
+        # league, coaches get bolder; if it keeps failing, they go back to kicking
+        t["aggression"] = max(0.0, min(1.0, t.get("aggression", 0.45) + aggr_push * learn))
         base_def = DEFENSIVE_SCHEMES[c.def_scheme]
         for key, mult in (("two_high", 1.0), ("zone", 0.6)):
             v = t.get(key, base_def[key]) + def_push * mult * learn
             t[key] = max(0.0, min(1.0, v * 0.93 + base_def[key] * 0.07))
-    league.meta = {"off_push": off_push, "def_push": def_push, "ratio": ratio}
+    league.meta = {"off_push": off_push, "def_push": def_push, "ratio": ratio, "aggr_push": aggr_push}
 
 
 def pipeline_shift(league, position):
@@ -268,6 +275,10 @@ def season_averages(results):
         "sacks": tot["sacked"] / games,
         "first_downs": tot["first_downs"] / games,
         "drives": tot["drives"] / games,
+        "fourth_att": tot["fourth_att"] / games,
+        "fourth_conv": 100.0 * tot["fourth_conv"] / max(1, tot["fourth_att"]),
+        "two_att": tot["two_att"] / games,
+        "two_conv": 100.0 * tot["two_conv"] / max(1, tot["two_att"]),
         "games": games // 2,
     }
     return out

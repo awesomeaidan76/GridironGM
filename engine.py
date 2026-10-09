@@ -25,6 +25,7 @@ import specialteams as st_lib
 import advanced as adv_lib
 import trenches
 import grades
+import situations as sit_lib
 
 QUARTER = 900
 
@@ -263,6 +264,10 @@ class GameSim:
             side.dadj = {}
             side.oshift = 0.0
         self.res.gameplans = {self.home.abbr: self.home.dgp, self.away.abbr: self.away.dgp}
+        self._spike_next = False
+        for side, opp in ((self.home, self.away), (self.away, self.home)):
+            u, v = side.team.unit_ratings(), opp.team.unit_ratings()
+            side.conv_edge = _clip((u["OFF"] - v["DEF"]) / 250.0, -0.08, 0.08)
 
         self.form = {}
         self._build_form(self.home, home_edge=True)
@@ -612,15 +617,20 @@ class GameSim:
                 clock_runs_after = True
                 tempo = self.poss.plan["tempo"]
                 if mode == "hurry":
-                    between = random.uniform(11, 17)
+                    # sloppy game managers lose seconds getting lined up
+                    between = random.uniform(11, 17) + random.random() * (20 - self._gm(self.poss)) * 0.35
                 elif mode == "milk":
                     between = random.uniform(37, 40)
                 else:
                     between = random.gauss(38.0 - 9.0 * (tempo - 0.5), 2.0) / self.pace
             if clock_runs_after and between > 0:
                 # Timeouts to stop the clock
-                if mode == "hurry" and self.poss.timeouts > 0 and \
-                        self.clock - elapsed <= 90 and self.quarter in (2, 4, 5):
+                k = self.poss.lu["K"][0]
+                fg_ok = 100 - self.yl + 17 <= self.fg_range(k)
+                diff = self.poss.score - self.dfn.score
+                after = self.clock - elapsed
+                if self.quarter in (2, 4, 5) and sit_lib.offense_timeout(
+                        after, self.yl, diff, self.poss.timeouts, mode, fg_ok, self._gm(self.poss)):
                     self.poss.timeouts -= 1
                     self._rest_all(2.5)
                     self.log(f"Timeout {self.poss.abbr}", "note")
@@ -630,6 +640,10 @@ class GameSim:
                     self._rest_all(2.5)
                     self.log(f"Timeout {self.dfn.abbr}", "note")
                     between = 0
+                elif self.quarter in (2, 4, 5) and sit_lib.spike(after, self.poss.timeouts, mode, self.down,
+                                                                 self._gm(self.poss)):
+                    between = 3
+                    self._spike_next = True
             elapsed += between
         self.clock -= elapsed
         # Two-minute warning
@@ -642,10 +656,12 @@ class GameSim:
         self.ts(self.poss, "top", min(elapsed, start))
 
     def _defense_wants_timeout(self):
-        if self.dfn.timeouts <= 0 or self.quarter < 4:
+        if self.dfn.timeouts <= 0 or self.quarter < 2 or self.quarter == 3:
             return False
         diff = self.dfn.score - self.poss.score
-        return diff < 0 and diff >= -16 and self.clock <= 180
+        mode = self.urgency(self.poss)
+        return sit_lib.defense_timeout(self.clock, diff, self.dfn.timeouts, mode, self.quarter,
+                                       self._gm(self.dfn))
 
     # ── Main loop ────────────────────────────────────────────────────────────
 
@@ -794,7 +810,8 @@ class GameSim:
         recv = self.other(kicking)
         self.poss, self.dfn = kicking, recv
         k = kicking.lu["K"][0]
-        needed = onside or (self.quarter == 4 and self.clock < 150 and 0 < recv.score - kicking.score <= 16)
+        needed = onside or (self.quarter == 4 and recv.score > kicking.score and
+                            sit_lib.should_onside(recv.score - kicking.score, self.clock, kicking.timeouts))
         ret = recv.kr
         kind = st_lib.choose_kickoff({"onside_needed": needed,
                                       "late_half": self.quarter in (2, 4) and self.clock <= 25,
@@ -1027,6 +1044,12 @@ class GameSim:
             self.down, self.togo = 1, min(10, 100 - self.yl)
             return
         prob = self.fg_probability(k, dist)
+        diff = self.poss.score - self.dfn.score
+        if self.quarter >= 4 and self.clock <= 120 and -3 <= diff <= 0 and self.dfn.timeouts > 0 \
+                and random.random() < 0.25 + self.dfn.team.coach.tendencies.get("aggression", 0.45) * 0.4:
+            self.dfn.timeouts -= 1
+            self.log(f"Timeout {self.dfn.abbr} — icing the kicker", "note")
+            prob -= 0.012 * (1.3 - self.e(k, "composure") / 100.0)
         bucket = "0_39" if dist < 40 else "40_49" if dist < 50 else "50"
         self.st(k, "fga")
         self.st(k, f"fga_{bucket}")
@@ -1065,7 +1088,9 @@ class GameSim:
             off_q = (side.team.unit_ratings()["OFF"])
             def_q = (self.other(side).team.unit_ratings()["DEF"])
             prob = _clip(0.47 + (off_q - def_q) / 300.0, 0.30, 0.65)
+            self.ts(side, "two_att")
             if random.random() < prob:
+                self.ts(side, "two_conv")
                 self.add_score(side, 2, "Two-point conversion is GOOD")
             else:
                 self.log("Two-point conversion FAILS", "score")
@@ -1096,13 +1121,15 @@ class GameSim:
 
     def _go_for_two(self, side):
         diff = side.score - self.other(side).score     # after the TD
-        aggr = side.plan["aggression"]
-        late = self.quarter >= 4 or (self.quarter == 3 and self.clock < 300)
         if self.quarter >= 5:
             return False
-        if late and diff in (-2, -5, -10, -13, -16, 1, 5, 12):
-            return random.random() < 0.55 + aggr * 0.4
-        return random.random() < 0.03 + aggr * 0.07
+        k = side.lu["K"][0]
+        xp = self.fg_probability(k, self.pat_dist) * 0.995
+        secs = self._secs_left()
+        if self.quarter <= 2:
+            secs = max(secs, 2400.0)
+        return sit_lib.two_point(diff, secs, xp, side.plan["aggression"] * self.go_mult, self._gm(side),
+                                 edge=self._edge_for(side))
 
     # ── Situational decisions ────────────────────────────────────────────────
 
@@ -1141,29 +1168,28 @@ class GameSim:
         if self.quarter == 2 and self.clock <= 30 and in_range and fg_p > 0.3:
             return "fg"
 
-        base = {1: 0.42, 2: 0.24, 3: 0.14, 4: 0.08, 5: 0.06}.get(self.togo, 0.025)
-        if self.yl < 40:
-            base *= 0.30
-        elif self.yl < 60:
-            base *= 1.0
-        elif not in_range or fg_p < 0.55:
-            base *= 1.7
-        else:
-            base *= 0.8
-        if self.yl >= 97 and self.togo <= 3:
-            base = max(base, 0.35)
-        if late and diff > 0:
-            base *= 0.3
-        go_p = base * (0.45 + aggr * 1.25)
-        if random.random() < go_p:
-            return "go"
-        if in_range and fg_p >= 0.40:
-            return "fg"
-        if self.yl >= 62 and fg_p < 0.45:
-            # No man's land: go for it more, otherwise pooch punt
-            if random.random() < 0.25 + aggr * 0.3:
-                return "go"
-        return "punt"
+        # Everything else: compare win probability for going, punting and kicking,
+        # bent by how much this coach trusts the numbers
+        p = self.poss.lu["P"][0]
+        st = {"diff": diff, "secs": self._secs_left() if self.quarter <= 4 else 1800.0, "yl": self.yl,
+              "togo": self.togo, "fg_prob": fg_p, "fg_range_ok": in_range and fg_p > 0.05,
+              "punt_net": 39 + (p.a("punt_power") - 70) * 0.12, "edge": self._edge_for(self.poss),
+              "off_edge": self.poss.conv_edge}
+        if self.quarter <= 2:
+            st["secs"] = max(st["secs"], 1800.0)        # first-half calls are about points, not the clock
+        return sit_lib.choose_fourth(st, _clip(aggr, 0.0, 1.5), self._gm(self.poss))
+
+    def _secs_left(self):
+        if self.quarter > 4:
+            return max(1.0, self.clock)
+        return max(1.0, 3600.0 - self.elapsed())
+
+    def _edge_for(self, side):
+        """Pre-game strength edge (points over a full game) from this side's point of view."""
+        return self.pre_edge if side is self.home else -self.pre_edge
+
+    def _gm(self, side):
+        return side.team.coach.r("game_management")
 
     def _pass_probability(self):
         plan = self.poss.plan
@@ -1227,16 +1253,30 @@ class GameSim:
             self.ts(self.poss, "rz_trips")
 
         # End-of-half / game situations
+        if self._spike_next:
+            self._spike_next = False
+            self._spike()
+            return
         if self._kneel_ok():
             self._kneel()
             return
         diff = self.poss.score - self.dfn.score
         k = self.poss.lu["K"][0]
         fg_dist = 100 - self.yl + 17
-        if self.clock <= 6 and (self.quarter == 2 or (self.quarter >= 4 and -3 <= diff <= 0)) \
-                and fg_dist <= self.fg_range(k) + 3:
+        in_range = fg_dist <= self.fg_range(k) + 3
+        late_kick = self.clock <= 6 or (self.clock <= 14 and self.poss.timeouts == 0)
+        if late_kick and in_range and (self.quarter == 2 or (self.quarter >= 4 and -3 <= diff <= 0)):
             self.field_goal()
             return
+        if self.quarter >= 4 and self.clock <= 6 and -8 <= diff < 0 and self.yl < 45:
+            self.resolve(self._laterals())
+            return
+        if self.drive is not None and self.drive["plays"] == 1 and self.quarter in (1, 2, 3) \
+                and self.poss.timeouts > 0 and \
+                random.random() < (20 - self._gm(self.poss)) / 20.0 * 0.035:
+            # Sloppy operation: a timeout burned to avoid a delay-of-game flag
+            self.poss.timeouts -= 1
+            self.log(f"Timeout {self.poss.abbr} (to avoid a delay of game)", "note")
         if self.down == 4:
             choice = self._fourth_down()
             if choice in ("punt", "fg"):
@@ -1379,6 +1419,47 @@ class GameSim:
                 self.st(r, "rush_succ")
             if moved:
                 self.st(r, "rush_first")
+
+    def _spike(self):
+        qb = self.poss.qb
+        self.st(qb, "pass_att")
+        self.ts(self.poss, "pass_att")
+        self.ts(self.poss, "spikes")
+        self.log(f"{_short(qb.name)} spikes the ball to stop the clock")
+        self.clock -= 1
+        self.down += 1
+
+    def _laterals(self):
+        """Last play, out of range: the hook-and-lateral circus."""
+        off = self.poss
+        self.ts(off, "plays")
+        qb = off.qb
+        wrs = off.lu["WR"][:3] or off.lu["RB"][:1]
+        carrier = max(wrs, key=lambda p: p.a("speed")) if wrs else qb
+        to_goal = 100 - self.yl
+        speed = (self.e(carrier, "speed") - 85) / 400.0
+        self.clock = 0
+        if random.random() < 0.025 + speed:
+            self.st(qb, "pass_att")
+            self.st(qb, "pass_cmp")
+            self.st(qb, "pass_yds", to_goal)
+            self.st(carrier, "targets")
+            self.st(carrier, "rec")
+            self.st(carrier, "rec_yds", to_goal)
+            self.ts(off, "pass_att")
+            self.ts(off, "pass_cmp")
+            self.ts(off, "pass_yds", to_goal)
+            return {"kind": "pass", "yards": to_goal, "time": 14, "clock_runs": True, "carrier": carrier,
+                    "td": True, "complete": True, "ptype": "short", "air": 5,
+                    "text": f"Laterals! {_short(carrier.name)} breaks free on a multi-lateral play — "
+                            f"{to_goal} yards, TOUCHDOWN"}
+        gain = min(random.randint(3, 25), to_goal - 1)
+        self.st(carrier, "rush_att")
+        self.st(carrier, "rush_yds", gain)
+        self.ts(off, "rush_att")
+        self.ts(off, "rush_yds", gain)
+        return {"kind": "run", "yards": gain, "time": 12, "clock_runs": True, "carrier": carrier,
+                "text": f"Lateral after lateral... {_short(carrier.name)} is finally dragged down after {gain} yards"}
 
     def _kneel(self):
         qb = self.poss.qb
@@ -2092,8 +2173,9 @@ class GameSim:
             self.st(rec, "rec_td")
             out["text"] += f" for {yards} yards, TOUCHDOWN"
             return out
-        out["oob"] = random.random() < (0.26 if ptype != "screen" else 0.12) + \
-            (0.15 if self.urgency(off) == "hurry" else 0.0)
+        mode = self.urgency(off)
+        out["oob"] = random.random() < ((0.26 if ptype != "screen" else 0.12) +
+                                        (0.25 if mode == "hurry" else 0.0)) * (0.3 if mode == "milk" else 1.0)
         # Tackle & fumble
         tackler = dfnd if (dfnd and random.random() < 0.55) else random.choice(tacklers[:6]) \
             if tacklers else None
@@ -2660,7 +2742,13 @@ class GameSim:
             return out
         if yards < 0 and self.yl + yards <= 0:
             out["safety"] = True
-        out["oob"] = random.random() < (0.17 if outside else 0.04)
+        mode = self.urgency(off)
+        oob_p = 0.17 if outside else 0.04
+        if mode == "hurry":
+            oob_p *= 2.2               # get out of bounds
+        elif mode == "milk":
+            oob_p *= 0.25              # stay in bounds, keep the clock running
+        out["oob"] = random.random() < oob_p
         if yards <= 2:
             pool = front
         elif yards <= 9:
