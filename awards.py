@@ -72,11 +72,39 @@ def compute(lg):
         return {"pid": p.id, "name": p.name, "pos": p.position, "team": t.abbr,
                 "line": _line(p)}
 
-    res["MVP"] = best(players, lambda pt: (off_score(pt[0].season_stats, pt[0].position)
-                                           * (1.15 if pt[0].position == "QB" else 0.9)
-                                           if pt[0].position in OFFENSE else
-                                           def_score(pt[0].season_stats) * 0.8)
-                      + wpct[pt[1].abbr] * 90 + pt[0].ca * 0.1)
+    # MVP: how far a player stood above the other starters at his position, plus team
+    # success. Quarterbacks get a value bump (they win most MVPs, as in real life), but a
+    # truly historic season at another position can take it.
+    def raw(pt):
+        p = pt[0]
+        if p.position in DEFENSE:
+            return def_score(p.season_stats)
+        if p.position in ("OT", "IOL", "K", "P", "FB"):
+            return None
+        return off_score(p.season_stats, p.position)
+    by_pos = {}
+    for pt in players:
+        v = raw(pt)
+        if v is not None and pt[0].season_stats["gs"] >= 8:
+            by_pos.setdefault(pt[0].position, []).append(v)
+    pos_stats = {}
+    for pos, vals in by_pos.items():
+        if len(vals) >= 4:
+            mu = sum(vals) / len(vals)
+            sd = (sum((v - mu) ** 2 for v in vals) / len(vals)) ** 0.5 or 1.0
+            pos_stats[pos] = (mu, sd)
+    MVP_POS_W = {"QB": 1.25, "RB": 0.95, "WR": 0.85, "TE": 0.75, "EDGE": 0.8, "DT": 0.75,
+                 "LB": 0.65, "CB": 0.7, "S": 0.6}
+
+    def mvp_score(pt):
+        v = raw(pt)
+        ps = pos_stats.get(pt[0].position)
+        if v is None or ps is None:
+            return -99.0
+        z = (v - ps[0]) / ps[1]
+        return z * MVP_POS_W.get(pt[0].position, 0.6) + wpct[pt[1].abbr] * 2.2 \
+            + (0.9 if pt[0].position == "QB" else 0.0)
+    res["MVP"] = best(players, mvp_score)
     res["Offensive Player of the Year"] = best(
         [pt for pt in players if pt[0].position in OFFENSE and pt[0].position not in ("OT", "IOL")],
         lambda pt: off_score(pt[0].season_stats, pt[0].position)

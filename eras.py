@@ -94,7 +94,11 @@ def adapt_coaching(league):
     conv = avgs.get("fourth_conv")
     aggr_push = 0.0
     if conv is not None and avgs.get("fourth_att", 0) > 0.2:
-        aggr_push = max(-0.03, min(0.03, (conv - 50.0) / 100.0 * 0.25 + random.gauss(0, 0.006)))
+        # judged against what a 4th-down try normally converts in this engine (~42%), with a slow
+        # pull back toward the long-run norm so boldness can rise and fall over the decades
+        mean_aggr = sum(t.coach.tendencies.get("aggression", 0.45) for t in league.teams.values()) / len(league.teams)
+        aggr_push = max(-0.03, min(0.03, (conv - 42.0) / 100.0 * 0.30 + (0.45 - mean_aggr) * 0.08
+                                   + random.gauss(0, 0.008)))
     from coach import OFFENSIVE_SCHEMES, DEFENSIVE_SCHEMES
     for team in league.teams.values():
         c = team.coach

@@ -12,6 +12,8 @@ stay UI-free (see `docs/ARCHITECTURE.md`).
 - Player-level distributions (carry/target shares, 1,000-yard seasons, leaders):
   `python tools/usage.py`.
 - Long-run stability / economy: `tools/longsim.py`, `tools/economy.py`.
+- The 100-season test: `python tools/century.py 100 <seed>` (~27 min; writes one JSON line per season,
+  then a decade-by-decade report; `--report file.jsonl` re-prints it). Run two seeds in parallel.
 - Expected-points table refit (after big engine changes): `python tools/fit_ep.py`.
 - Offensive system identity (pass rate, depth, personnel, shotgun, QB runs per system): `python tools/schemes.py`.
 - Check several calibrate seeds before trusting a change: league talent landscapes vary a lot.
