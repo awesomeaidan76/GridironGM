@@ -142,6 +142,8 @@ COACH_RATING_LABELS = {
 
 
 class Coach:
+    youth_trust = None       # 0-1: how readily he plays young players (front_office.coach_youth_trust)
+
     def __init__(self, name=None, age=None):
         self.name = name or names.random_name()
         self.age = age or random.randint(36, 62)

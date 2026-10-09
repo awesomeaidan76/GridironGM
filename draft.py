@@ -133,6 +133,9 @@ def scouted_values(lg, team, p):
 
 def board_value(lg, team, p, needs):
     est_ca, est_pa = scouted_values(lg, team, p)
+    if getattr(team, "gm", None) is not None:
+        import front_office as fo
+        return fo.board_value(lg, team, p, needs, est_ca, est_pa)
     v = est_ca * 0.45 + est_pa * 0.55 + POSITION_VALUE[p.position] * 22 - (p.age - 21) * 2.0
     v += needs.get(p.position, 0) * 9
     if p.position in ("K", "P"):
@@ -157,6 +160,8 @@ def make_pick(lg, abbr, player):
     player.on_rookie_deal = True
     team.add_player(player)
     lg.draft_log.append((rnd, pick, abbr, player.id, player.name, player.position))
+    import front_office as fo
+    fo.record_pick(lg, team, player, rnd, pick)
     lg.draft_index += 1
     if rnd == 1 or abbr == lg.user_abbr:
         lg.add_news("Draft", f"Pick {pick} (Rd {rnd}): {team.full_name} select "

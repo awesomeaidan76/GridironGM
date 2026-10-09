@@ -7,6 +7,7 @@ from contracts import (asking_salary, market_value, make_contract, contract_leng
                        min_salary, fmt_money)
 from ratings import ROSTER_MINIMUM, ROSTER_TEMPLATE, POSITION_VALUE, POSITIONS
 from settings import settings
+import front_office as fo
 import roster_rules as rr
 import negotiation as nego
 
@@ -136,12 +137,19 @@ def ai_resign(lg, team):
             at_pos = sorted(team.players_at(p.position), key=lambda x: -player_value(x))
             idx = at_pos.index(p)
             keep_depth = max(1, ROSTER_TEMPLATE[p.position] - 1)
-            wants = idx < keep_depth and (p.age <= 32 or p.position in ("QB", "K", "P") and p.age <= 37)
+            g = fo.gm_of(team)
+            loyal = g.t("loyalty") if g else 0.5
+            mode = fo.plan_of(team)
+            max_age = 32 + (1 if loyal >= 0.75 else 0) - (3 if mode in ("Rebuild", "Tank") and p.ovr < 84 else 0)
+            wants = idx < keep_depth and (p.age <= max_age or p.position in ("QB", "K", "P") and p.age <= 37)
             if p.ca < 80:
+                wants = False
+            if mode == "Cap Reset" and p.ovr < 80:
                 wants = False
             ask = asking_salary(p, lg.salary_cap, 1.0) * random.uniform(0.9, 1.02)
             space = team.cap_space(lg.salary_cap) + p.salary
-            if wants and ask <= space * 0.6 and random.random() < 0.85:
+            share = 0.6 if g is None else 0.45 + 0.30 * (1.0 - g.t("cap_disc"))
+            if wants and ask <= space * share and random.random() < 0.70 + 0.30 * loyal:
                 yrs = contract_length(p)
                 bonus, guar = nego.default_structure(p, int(ask), yrs)
                 p.contract = nego.make(int(ask), yrs, lg.year, bonus, guar)
@@ -154,22 +162,41 @@ def ai_resign(lg, team):
                 p.contract = None
                 p.fa_origin = (team.abbr, lg.year)
                 lg.free_agents.append(p)
+                if wants is False and p.ovr >= 82 and g is not None and mode in fo.SELLERS:
+                    lg.add_news("Front Office", f"The {fo.describe(team)} {team.name} let {p.position} "
+                                                f"{p.name} ({p.age}) walk in free agency.", team.abbr)
     return kept
 
 
 def ai_free_agency_wave(lg, max_signings=3):
-    """Each AI team tries to plug its biggest holes with free agents."""
+    """
+    Each AI team works the market according to its front office: how much the
+    plan and owner let it spend, whether the GM chases stars or bargains,
+    whether a rebuilding club will look at anyone over 29, and whether an
+    analytics GM passes on mid-priced veterans to protect compensatory picks.
+    """
     teams = [t for t in lg.teams.values() if t.abbr != lg.user_abbr]
     random.shuffle(teams)
-    teams.sort(key=lambda t: -t.cap_space(lg.salary_cap) * random.uniform(0.6, 1.4))
+    teams.sort(key=lambda t: -t.cap_space(lg.salary_cap) * fo.spend_factor(t) * random.uniform(0.6, 1.4))
     aggr = settings["ai_fa_aggression"]
+    wave = getattr(lg, "fa_wave", 0)
     signed = 0
     for team in teams:
+        g = fo.gm_of(team)
+        mode = fo.plan_of(team)
+        spend = fo.spend_factor(team)
+        limit = max(1, int(round(max_signings * min(1.4, 0.55 + spend * 0.45))))
         needs = team.needs()
         ranked = sorted(needs.items(), key=lambda kv: -kv[1])
+        # Star-chasers look at the best names first, whatever the depth chart says
+        if g is not None and g.t("stars") >= 0.72 and wave <= 1 and spend >= 0.9:
+            top = sorted({p.position for p in lg.free_agents if p.ovr >= 82},
+                         key=lambda pos: -needs.get(pos, 0))
+            ranked = [(pos, max(needs.get(pos, 0), 0.12)) for pos in top[:2]] + \
+                [kv for kv in ranked if kv[0] not in top[:2]]
         n = 0
         for pos, need in ranked[:8]:
-            if n >= max_signings or need < 0.10 / aggr:
+            if n >= limit or need < 0.10 / aggr:
                 break
             if active_count(team) >= roster_limit(lg):
                 break
@@ -180,15 +207,28 @@ def ai_free_agency_wave(lg, max_signings=3):
             if len(at_pos) < ROSTER_MINIMUM[pos]:
                 bar = min(bar, 70)
             cands = [p for p in lg.free_agents if p.position == pos and p.ca > bar + 3]
+            if mode in ("Rebuild", "Tank", "Youth Movement", "Cap Reset"):
+                cands = [p for p in cands if p.age <= 28 or p.ovr < 72]
+            if g is not None and g.t("analytics") >= 0.7 and wave <= 1:
+                # protect compensatory picks: skip mid-priced veterans who left another club
+                cands = [p for p in cands if not (p.fa_origin and p.fa_origin[0] != team.abbr
+                                                  and 72 <= p.ovr < 82 and random.random() < 0.6)]
             if not cands:
                 continue
-            space = team.cap_space(lg.salary_cap) - min_salary(lg.salary_cap) * 4
-            cands.sort(key=lambda p: -(player_value(p)))
+            space = team.cap_space(lg.salary_cap) - min_salary(lg.salary_cap) * 4 - fo.cap_reserve(lg, team)
+            if g is not None and g.t("cap_disc") >= 0.75 and g.t("stars") < 0.45:
+                cands.sort(key=lambda p: -(player_value(p) - asking(lg, p) / lg.salary_cap * 400))
+            else:
+                cands.sort(key=lambda p: -(player_value(p)))
             for p in cands[:6]:
                 ask = asking(lg, p)
                 appeal = team_appeal(lg, team, p)
-                price = int(ask * (1.08 - (appeal - 0.8) * 0.4) * random.uniform(0.95, 1.08))
-                if price <= space and random.random() < 0.75 * aggr:
+                mult = 1.0
+                if g is not None:
+                    mult = 1.0 + (g.t("stars") - 0.5) * 0.12 - (g.t("cap_disc") - 0.5) * 0.10
+                price = int(ask * mult * (1.08 - (appeal - 0.8) * 0.4) * random.uniform(0.95, 1.08))
+                act = 0.75 + (fo.activity(team) - 0.5) * 0.4
+                if price <= space * min(1.0, spend) and random.random() < act * aggr:
                     sign(lg, team, p, price, contract_length(p))
                     n += 1
                     signed += 1

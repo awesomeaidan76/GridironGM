@@ -9,6 +9,7 @@ from contracts import market_value, fmt_money
 from ratings import POSITION_VALUE, ROSTER_MINIMUM
 from settings import settings
 import roster_rules as rr
+import front_office as fo
 
 
 def is_pick(asset):
@@ -27,6 +28,8 @@ def trade_value(p, lg, team=None):
     if is_pick(p):
         _, y, r, o = p
         v = rr.pick_value(lg, y, r, o)
+        if team is not None and fo.gm_of(team) is not None:
+            return v * fo.pick_mult(lg, team, y)
         if team is not None:
             # Rebuilding teams love picks, contenders less so
             ranks = lg.strength_order()
@@ -44,7 +47,9 @@ def trade_value(p, lg, team=None):
     if team is not None:
         need = team.needs().get(p.position, 0)
         v *= 1.0 + min(0.4, need * 0.15)
-        if team.abbr != p.team:
+        if fo.gm_of(team) is not None:
+            v *= fo.player_mult(lg, team, p)
+        elif team.abbr != p.team:
             ranks = lg.strength_order()
             rebuilding = ranks.index(team.abbr) >= 20 if team.abbr in ranks else False
             if rebuilding and p.age >= 30:
@@ -80,7 +85,10 @@ def evaluate(lg, user_team, ai_team, give, get):
         if rr.pick_owner(lg, y, r, o) != ai_team.abbr:
             return False, f"{ai_team.full_name} no longer own one of those picks.", 0, 0
     val_in = sum(trade_value(a, lg, ai_team) for a in give)
-    val_out = sum(trade_value(a, lg, None) for a in get)
+    # What the AI gives up, valued through its own eyes (a rebuilding club lets veterans go cheaply,
+    # a loyal GM hates parting with his own players)
+    val_out = sum(trade_value(a, lg, ai_team) for a in get) * 0.5 + \
+        sum(trade_value(a, lg, None) for a in get) * 0.5
     gp, tp = _players(give), _players(get)
     # Cap check for both sides
     if settings["hard_cap"]:
@@ -108,7 +116,7 @@ def evaluate(lg, user_team, ai_team, give, get):
         if n < ROSTER_MINIMUM[pos] - 1:
             return False, f"{ai_team.full_name} won't go that thin at {pos}.", val_in, val_out
     will = max(0.05, settings["ai_trade_willingness"])
-    threshold = val_out * (1.10 / will) + 1.0
+    threshold = val_out * (1.10 / will) * fo.demand(ai_team) + 1.0
     if val_in >= threshold:
         return True, f"{ai_team.full_name} accept the trade.", val_in, val_out
     gap = threshold - val_in
@@ -121,7 +129,7 @@ def evaluate(lg, user_team, ai_team, give, get):
     return False, msg, val_in, val_out
 
 
-def execute(lg, team_a, team_b, a_gives, b_gives):
+def execute(lg, team_a, team_b, a_gives, b_gives, why=None):
     for a in a_gives:
         if is_pick(a):
             rr.transfer_pick(lg, a[1], a[2], a[3], team_b.abbr)
@@ -149,7 +157,7 @@ def execute(lg, team_a, team_b, a_gives, b_gives):
     b_names = ", ".join(asset_label(lg, x) for x in b_gives) or "nothing"
     text = f"TRADE: {team_a.abbr} send {a_names} to {team_b.abbr} for {b_names}"
     lg.add_transaction(text)
-    lg.add_news("Trade", text, team_a.abbr)
+    lg.add_news("Trade", text + (f". {why}" if why else ""), team_a.abbr)
 
 
 def ai_trade_market(lg, chance=0.18):

@@ -73,6 +73,9 @@ SPEC = {
     "ai_trade_willingness": (1.0, "AI", "AI trade willingness", "float", (0.0, 2.0, 0.1)),
     "ai_fa_aggression":    (1.0, "AI", "AI free agency aggression", "float", (0.2, 2.0, 0.1)),
     "coach_hot_seat":      (1.0, "AI", "Coach firing frequency", "float", (0.0, 3.0, 0.1)),
+    "gm_hot_seat":         (1.0, "AI", "CPU general manager firing frequency", "float", (0.0, 3.0, 0.1)),
+    "ai_personality_strength": (1.0, "AI", "How different CPU front offices are (0 = all alike)", "float",
+                                (0.0, 2.0, 0.1)),
     "holdout_rate":        (1.0, "AI", "Contract holdout frequency", "float", (0.0, 3.0, 0.1)),
 
     # ── Game ─────────────────────────────────────────────────────────────────

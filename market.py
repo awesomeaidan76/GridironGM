@@ -10,6 +10,7 @@ the reasons make deals happen, not bad valuations.
 """
 import random
 
+import front_office as fo
 import roster_rules as rr
 from settings import settings
 from trades import trade_value, execute, is_pick, asset_label
@@ -26,15 +27,26 @@ def _ranks(lg):
 
 
 def _mode(lg, team):
-    """'contend', 'middle' or 'rebuild' from roster strength (and record in season)."""
-    rank = _ranks(lg).index(team.abbr)
-    rec = lg.standings.get(team.abbr)
-    if rec is not None and rec.games >= 6:
-        if rec.pct >= 0.62:
-            rank = min(rank, 8)
-        elif rec.pct <= 0.30:
-            rank = max(rank, 24)
-    return "contend" if rank < 10 else "rebuild" if rank >= 22 else "middle"
+    """'contend', 'middle' or 'rebuild' from the club's front-office plan."""
+    if fo.gm_of(team) is None:
+        rank = _ranks(lg).index(team.abbr)
+        return "contend" if rank < 10 else "rebuild" if rank >= 22 else "middle"
+    m = fo.plan_of(team)
+    return "contend" if m in fo.BUYERS else "rebuild" if m in fo.SELLERS else "middle"
+
+
+def _weighted(teams, fn):
+    w = [max(0.0, fn(t)) for t in teams]
+    if sum(w) <= 0:
+        return None
+    return random.choices(teams, weights=w)[0]
+
+
+def _agrees(lg, team, gets, gives, slack=0.0):
+    """Does this club's GM see the deal as worth it from his side?"""
+    vin = _value(lg, gets, team)
+    vout = _value(lg, gives, team)
+    return vin >= vout * (fo.demand(team) - slack) - 0.5
 
 
 def _cap_ok(lg, team, incoming, outgoing):
@@ -103,19 +115,34 @@ def _need_swap(lg, teams):
         a_gets += add
     if not (_cap_ok(lg, a, [y], [x]) and _cap_ok(lg, b, [x], [y])):
         return None
-    execute(lg, a, b, [g for g in b_gets], [g for g in a_gets])
+    if not (_agrees(lg, a, a_gets, b_gets, 0.15) and _agrees(lg, b, b_gets, a_gets, 0.15)):
+        return None
+    execute(lg, a, b, [g for g in b_gets], [g for g in a_gets],
+            why=f"A swap of needs: {a.name} wanted a {y.position}, {b.name} a {x.position}.")
     return True
 
 
+def _buyer_w(lg, t):
+    return fo.param(t, "buy") * (0.4 + fo.activity(t)) if fo.gm_of(t) else 0.0
+
+
+def _seller_w(lg, t):
+    return fo.param(t, "sell") * (0.4 + fo.activity(t)) if fo.gm_of(t) else 0.0
+
+
+def _raw_picks_for(lg, seller, value):
+    """Convert value in the seller's eyes into raw pick value (sellers prize picks)."""
+    return value / fo.pick_mult(lg, seller, lg.year + 1)
+
+
 def _contender_buys(lg, teams):
-    """A contender sends picks (and maybe a young backup) to a rebuilding team for a proven starter."""
-    contenders = [t for t in teams if _mode(lg, t) == "contend"]
-    sellers = [t for t in teams if _mode(lg, t) == "rebuild"]
-    if not contenders or not sellers:
+    """A buyer (contending / all-in club) sends picks to a seller (rebuilding club) for a veteran."""
+    buyer = _weighted(teams, lambda t: _buyer_w(lg, t))
+    seller = _weighted([t for t in teams if t is not buyer], lambda t: _seller_w(lg, t))
+    if buyer is None or seller is None:
         return None
-    buyer, seller = random.choice(contenders), random.choice(sellers)
     needs = buyer.needs()
-    cands = [p for p in _sellable(seller, 72) if p.age >= 26]
+    cands = [p for p in _sellable(seller, 72) if p.age >= 26 and p.position not in ("K", "P", "FB")]
     if not cands:
         return None
     cands.sort(key=lambda p: -(needs.get(p.position, 0) * 30 + p.ovr))
@@ -123,23 +150,79 @@ def _contender_buys(lg, teams):
     have = sorted((x.ovr for x in buyer.players_at(target.position)), reverse=True)
     if have and target.ovr <= have[0] - 2 and needs.get(target.position, 0) < 0.3:
         return None
-    want = trade_value(target, lg, seller) * 1.05
-    picks = _balance_with_picks(lg, buyer, want, 0.0)
+    want = trade_value(target, lg, seller) * 1.05 * fo.demand(seller)
+    picks = _balance_with_picks(lg, buyer, _raw_picks_for(lg, seller, want), 0.0)
     if not picks:
         return None
     if not _cap_ok(lg, buyer, [target], []):
         return None
-    execute(lg, seller, buyer, [target], picks)
+    if not _agrees(lg, buyer, [target], picks, 0.10):
+        return None
+    execute(lg, seller, buyer, [target], picks, why=fo.trade_note(seller, buyer))
+    return True
+
+
+def _blockbuster(lg, teams):
+    """An all-in club (or a star-chasing GM) pays a premium - first-round picks - for a star."""
+    def w(t):
+        g = fo.gm_of(t)
+        if g is None:
+            return 0.0
+        base = {"All-In": 1.0, "Last Dance": 0.8, "Contend": 0.25}.get(fo.plan_of(t), 0.0)
+        return base * (0.3 + g.t("stars") + g.t("risk") * 0.5)
+    buyer = _weighted(teams, w)
+    if buyer is None:
+        return None
+    sellers = [t for t in teams if t is not buyer and fo.plan_of(t) in fo.SELLERS]
+    if not sellers:
+        return None
+    seller = _weighted(sellers, lambda t: _seller_w(lg, t))
+    stars = [p for p in _sellable(seller, 83) if p.age <= 31]
+    if not stars:
+        return None
+    target = max(stars, key=lambda p: p.ovr + fo.position_value(lg, buyer, p.position) * 6)
+    want = trade_value(target, lg, seller) * 1.10 * fo.demand(seller)
+    give = []
+    young = [p for p in _sellable(buyer, 66) if p.age <= 25 and p.position != target.position
+             and p.ovr < 82]
+    if young:
+        y = max(young, key=lambda p: trade_value(p, lg, seller))
+        if trade_value(y, lg, seller) < want * 0.6:
+            give.append(y)
+    have = _value(lg, give, seller)
+    picks = []
+    raw = rr.tradable_picks(lg, buyer.abbr)
+    firsts = sorted((("pick", *k) for k in raw if k[1] == 1), key=lambda k: k[1])
+    for k in firsts:
+        if have >= want * (1 - TRADE_TOL * 0.5) or len(picks) >= 2:
+            break
+        picks.append(k)
+        have += trade_value(k, lg, seller)
+    if have < want * (1 - TRADE_TOL):
+        extra = _balance_with_picks(lg, buyer, _raw_picks_for(lg, seller, want - have), 0.0,
+                                    exclude=picks)
+        if extra is None:
+            return None
+        picks += extra
+    give += picks
+    if not give or not _cap_ok(lg, buyer, [target], [g for g in give if not is_pick(g)]):
+        return None
+    if not _agrees(lg, buyer, [target], give, 0.20):
+        return None
+    execute(lg, seller, buyer, [target], give,
+            why=f"Blockbuster: the {fo.describe(buyer)} {buyer.name} push their chips in for a star.")
     return True
 
 
 def _salary_dump(lg, teams):
     """A team pressed against the cap moves a veteran contract for a late pick."""
-    tight = [t for t in teams if t.cap_space(lg.salary_cap) < lg.salary_cap * 0.02]
+    tight = [t for t in teams if t.cap_space(lg.salary_cap) < lg.salary_cap * 0.02
+             or fo.plan_of(t) == "Cap Reset"]
     roomy = [t for t in teams if t.cap_space(lg.salary_cap) > lg.salary_cap * 0.08]
     if not tight or not roomy:
         return None
-    a, b = random.choice(tight), random.choice(roomy)
+    a = _weighted(tight, lambda t: 3.0 if fo.plan_of(t) == "Cap Reset" else 1.0)
+    b = _weighted(roomy, lambda t: 0.5 + fo.activity(t))
     vets = [p for p in _sellable(a, 65) if p.salary > lg.salary_cap * 0.02 and p.age >= 28]
     if not vets:
         return None
@@ -151,13 +234,17 @@ def _salary_dump(lg, teams):
     pick = [("pick", *picks[0])] if picks and rr.pick_value(lg, *picks[0]) <= v * 1.1 else []
     if not _cap_ok(lg, b, [p], []):
         return None
-    execute(lg, a, b, [p], pick)
+    execute(lg, a, b, [p], pick, why=f"A salary dump: the {fo.describe(a)} {a.name} clear cap space.")
     return True
 
 
 def _pick_swap(lg, teams):
-    """Teams move up or down in a future draft."""
-    a, b = random.sample(teams, 2)
+    """Teams move up or down in a future draft: gamblers move up, analytics GMs trade down."""
+    a = _weighted(teams, lambda t: 0.3 + (fo.gm_of(t).t("risk") if fo.gm_of(t) else 0.5))
+    b = _weighted([t for t in teams if t is not a],
+                  lambda t: 0.3 + (fo.gm_of(t).t("analytics") if fo.gm_of(t) else 0.5))
+    if a is None or b is None:
+        return None
     pa = [k for k in rr.tradable_picks(lg, a.abbr)]
     pb = [k for k in rr.tradable_picks(lg, b.abbr)]
     if not pa or not pb:
@@ -172,11 +259,13 @@ def _pick_swap(lg, teams):
     add = _balance_with_picks(lg, a, vy, vx, exclude=[("pick", *x)])
     if add is None:
         return None
-    execute(lg, a, b, [("pick", *x)] + add, [("pick", *y)])
+    execute(lg, a, b, [("pick", *x)] + add, [("pick", *y)],
+            why=f"{b.name} trade down for extra picks.")
     return True
 
 
-DEALS = [(_need_swap, 0.40), (_contender_buys, 0.30), (_salary_dump, 0.12), (_pick_swap, 0.18)]
+DEALS = [(_need_swap, 0.36), (_contender_buys, 0.30), (_blockbuster, 0.06), (_salary_dump, 0.11),
+         (_pick_swap, 0.17)]
 
 
 def ai_trades(lg, attempts):
@@ -200,6 +289,9 @@ def ai_trades(lg, attempts):
 
 def weekly(lg):
     """In-season market activity (called after each regular-season week)."""
+    fo.ensure(lg)
+    if lg.phase == "regular" and lg.week + 2 == settings["trade_deadline_week"]:
+        fo.update_plans(lg, midseason=True)       # buyers and sellers declare themselves
     if lg.phase == "regular" and lg.week + 1 < settings["trade_deadline_week"]:
         # More action as the deadline approaches
         attempts = 2 + (3 if lg.week + 2 >= settings["trade_deadline_week"] else 0)
@@ -210,6 +302,7 @@ def weekly(lg):
 
 def offseason(lg, phase):
     """Offseason trade windows: around re-signing, before the draft and in free agency."""
+    fo.ensure(lg)
     attempts = {"resign": 4, "draft": 5, "free_agency": 6, "preseason": 3}.get(phase, 0)
     ai_trades(lg, attempts)
     if phase in ("resign", "free_agency", "preseason"):
@@ -254,6 +347,10 @@ def draft_day_trade(lg):
     if owner == lg.user_abbr:
         return False
     chance = {1: 0.14, 2: 0.10, 3: 0.07}.get(rnd, 0.04) * settings["ai_trade_willingness"]
+    sg = fo.gm_of(lg.teams[owner])
+    if sg is not None:
+        # analytics-minded and patient GMs love to trade down
+        chance *= 0.45 + sg.t("analytics") * 0.7 + sg.t("patience") * 0.3
     if random.random() > chance:
         return False
     year = lg.year + 1
@@ -268,7 +365,19 @@ def draft_day_trade(lg):
         later[own2] = (i, r2, lg.draft_orig[i] if getattr(lg, "draft_orig", None) else own2)
     if not later:
         return False
-    buyer_abbr = random.choice(list(later))
+    # Who wants to jump up? Gamblers, and anyone hunting a quarterback when one is on the board
+    top_qb = any(p.position == "QB" and p.proj_rank and p.proj_rank <= lg.draft_index + 6
+                 for p in lg.draft_class[:8])
+
+    def jump(abbr):
+        t = lg.teams[abbr]
+        g = fo.gm_of(t)
+        w = 0.3 + (g.t("risk") if g else 0.5)
+        if top_qb and rnd == 1 and "Find a franchise QB" in (getattr(t, "plan", None) or {}).get("focus", ()):
+            w += 1.5
+        return w
+    cands = list(later)
+    buyer_abbr = random.choices(cands, weights=[jump(a) for a in cands])[0]
     i, r2, o2 = later[buyer_abbr]
     their = ("pick", year, r2, o2)
     their_v = rr.pick_value(lg, year, r2, o2)
@@ -280,7 +389,9 @@ def draft_day_trade(lg):
     execute(lg, buyer, seller, [their] + add, [("pick", year, rnd, orig)])
     lg.add_news("Draft", f"Trade: {buyer.full_name} move up to pick {pk}, sending "
                          f"{', '.join(asset_label(lg, a) for a in [their] + add)} to "
-                         f"{seller.full_name}.", buyer_abbr)
+                         f"{seller.full_name}"
+                         + (f" ({fo.gm_of(seller).name} trades down again)." if fo.gm_of(seller) and
+                            fo.gm_of(seller).t("analytics") >= 0.7 else "."), buyer_abbr)
     return True
 
 

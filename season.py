@@ -22,6 +22,7 @@ import committee
 import staff as staff_mod
 import roster_rules as rr
 import eras
+import front_office as fo
 import free_agency as fa
 from coach import hire_from_tree, generate_coach
 from development import develop, retirement_chance
@@ -135,6 +136,7 @@ def start_new_season(lg, first=False):
     if user is not None and user.tactics is None:
         user.tactics = default_tactics()
     staff_mod.ensure_league(lg)
+    fo.ensure(lg)
     staff_mod.set_expectation(lg)
     # Next spring's draft class plays its college season now; scouts watch it all year
     draft_mod.generate_class(lg)
@@ -512,6 +514,7 @@ def end_season(lg):
         p.last_season_gs = p.season_stats["gs"]
 
     _update_reputations(lg)
+    fo.season_end(lg)
     _coaching_carousel(lg)
 
     _season_evaluations(lg)
@@ -531,6 +534,7 @@ def end_season(lg):
     for team in lg.teams.values():
         rr.clear_ir(team)
     rr.prune_old(lg)
+    fo.update_plans(lg)
     eras.evolve(lg)
     committee.record_season_injuries(lg, regular)
     committee.review(lg)
@@ -646,7 +650,11 @@ def _coaching_carousel(lg):
             p_fire = 0.45
         elif rec.pct < 0.50 and c.team_seasons >= 5 and recent_playoffs == 0:
             p_fire = 0.30
-        p_fire *= hot
+        p_fire *= hot * fo.owner_coach_patience(team)
+        g = fo.gm_of(team)
+        new_gm = g is not None and g.seasons == 0 and c.team_seasons >= 1 and random.random() < 0.30 * hot
+        if new_gm:
+            p_fire = 1.0                 # the new general manager brings in his own coach
         retiring = c.age >= 68 or (c.age >= 63 and random.random() < 0.3)
         if not retiring and random.random() >= p_fire:
             continue
@@ -654,8 +662,9 @@ def _coaching_carousel(lg):
             lg.add_news("Coaching", f"{team.full_name} head coach {c.name} retires "
                                     f"({c.record_str} career).", team.abbr)
         else:
+            why = f" New GM {g.name} wants his own man." if new_gm else ""
             lg.add_news("Coaching", f"{team.full_name} fire head coach {c.name} after a "
-                                    f"{rec.wlt()} season.", team.abbr)
+                                    f"{rec.wlt()} season.{why}", team.abbr)
             c.team_seasons = 0
             if c.age < 64:
                 lg.coach_pool.append(c)
@@ -700,39 +709,54 @@ def innovator_coach(lg):
 
 
 def hire_coach(lg, team, elite=None):
+    """
+    The club interviews a slate of candidates - an up-and-coming innovator, a
+    disciple of a winning coach (or a hot coordinator), a retread from the
+    pool, a first-timer - and the GM picks the one who best fits his plan and
+    philosophy (a rebuild wants a teacher who plays young players, a contender
+    a proven game-day coach, an analytics GM an aggressive 4th-down caller).
+    """
     if elite is None:
         elite = sorted(lg.teams.values(), key=lambda t: -lg.standings[t.abbr].pct)[:8]
-    roll = random.random()
-    if roll < 0.25:
-        new = innovator_coach(lg)
-        how = "an up-and-coming innovator"
-    elif roll < 0.68:
-        src = random.choice([t for t in elite if t is not team] or elite)
-        promo = staff_mod.promote_coordinator(lg, team) if random.random() < 0.5 else None
+    slate = []                       # (coach, how, prior, kind, extra)
+    slate.append((innovator_coach(lg), "an up-and-coming innovator", 0.25, "innovator", None))
+    src = random.choice([t for t in elite if t is not team] or elite)
+    tree = hire_from_tree(src.coach, src.abbr)
+    tree.tendencies["aggression"] = max(0.0, min(1.0, src.coach.tendencies.get(
+        "aggression", 0.5) + random.gauss(0, 0.1)))
+    slate.append((tree, f"from the {src.coach.name} coaching tree ({src.abbr}, {src.coach.off_scheme})",
+                  0.22, "tree", None))
+    if random.random() < 0.5:
+        promo = staff_mod.peek_coordinator(lg, team)
         if promo is not None:
-            src, m = promo
-        new = hire_from_tree(src.coach, src.abbr)
-        new.tendencies["aggression"] = max(0.0, min(1.0, src.coach.tendencies.get(
-            "aggression", 0.5) + random.gauss(0, 0.1)))
-        how = f"from the {src.coach.name} coaching tree ({src.abbr}, {src.coach.off_scheme})"
-        if promo is not None:
-            new.name, new.age = m.name, m.age
+            psrc, m = promo
+            pc = hire_from_tree(psrc.coach, psrc.abbr)
+            pc.name, pc.age = m.name, m.age
             side = "offense" if m.role == "OC" else "defense"
-            new.ratings[side] = max(new.ratings[side], m.r("tactics"))
-            new.ratings["development"] = m.r("teaching")
-            new.ratings["motivation"] = m.r("motivation")
-            how = f"promoted from {src.abbr} {m.title.lower()} ({src.coach.off_scheme} tree)"
-    elif lg.coach_pool and roll < 0.88:
-        new = max(lg.coach_pool, key=lambda c: c.overall + c.reputation / 10 + random.uniform(0, 3))
+            pc.ratings[side] = max(pc.ratings[side], m.r("tactics"))
+            pc.ratings["development"] = m.r("teaching")
+            pc.ratings["motivation"] = m.r("motivation")
+            slate.append((pc, f"promoted from {psrc.abbr} {m.title.lower()} ({psrc.coach.off_scheme} tree)",
+                          0.22, "promo", promo))
+    if lg.coach_pool:
+        best = max(lg.coach_pool, key=lambda c: c.overall + c.reputation / 10 + random.uniform(0, 3))
+        slate.append((best, f"(previously {best.record_str})", 0.10, "pool", None))
+    first = generate_coach(quality=random.uniform(8, 14))
+    first.age = random.randint(35, 52)
+    slate.append((first, "a first-time head coach", 0.12, "first", None))
+
+    def score(entry):
+        coach, _, prior, _, _ = entry
+        return fo.coach_fit(lg, team, coach) + prior * 10 + random.gauss(0, 1.6)
+    new, how, _, kind, extra = max(slate, key=score)
+    if kind == "pool":
         lg.coach_pool.remove(new)
-        how = f"(previously {new.record_str})"
-    else:
-        new = generate_coach(quality=random.uniform(8, 14))
-        new.age = random.randint(35, 52)
-        how = "a first-time head coach"
+    elif kind == "promo":
+        staff_mod.take_coordinator(lg, *extra)
     new.team_seasons = 0
+    fo.coach_youth_trust(new)
     lg.add_news("Coaching", f"{team.full_name} hire {new.name} as head coach — {how}. "
-                            f"Scheme: {new.off_scheme} / {new.def_scheme}.", team.abbr)
+                            f"Scheme: {new.off_scheme} / {new.def_scheme}. {fo.coach_style(new)}.", team.abbr)
     return new
 
 

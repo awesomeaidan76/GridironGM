@@ -181,6 +181,9 @@ class League:
         self.weekly_awards = []    # (year, week, award, pid, name, pos, team, line)
         self.negotiations = {}     # contract talks in progress (negotiation.py)
         self.custom_settings = None  # this league's own sim settings (settings.use_league)
+        # Front offices (front_office.py)
+        self.gm_pool = []          # general managers out of work
+        self.fo_log = []           # (year, "offseason"/"midseason", {abbr: plan})
 
     def strength_order(self):
         """Team abbreviations from strongest to weakest roster (cached until something changes)."""

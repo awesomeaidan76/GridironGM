@@ -56,6 +56,10 @@ class Team:
     rotation = None          # {"DL": "heavy", ...} how freely each group substitutes (None = normal)
     def_gameplan = None      # the user's defensive game-plan choices (defense.GAMEPLAN_OPTIONS)
     ir_returns = (None, 0)   # (season, players activated from IR)
+    gm = None                # CPU general manager (front_office.GM); None for the user's club
+    plan = None              # the front office's current plan (front_office.PLANS)
+    power = None             # who controls the roster: "GM-led", "Coach-led" or "Owner-run"
+    youth_boost = 0.0        # extra depth-chart credit for young players (rebuilding clubs play the kids)
 
     def __init__(self, abbr, city, name, conference, division, colors):
         self.abbr = abbr
@@ -160,6 +164,14 @@ class Team:
                  and (include_injured or (not p.is_injured and not p.ir and not p.holdout))]
         order = self.depth_overrides.get(pos, [])
         rank = {pid: i for i, pid in enumerate(order)}
+        boost = self.youth_boost if self.tactics is None else 0.0
+        if self.tactics is None:
+            yt = getattr(self.coach, "youth_trust", None)
+            if yt is not None:
+                boost += (yt - 0.5) * 4.0          # the head coach's trust in young players
+        if boost:
+            return sorted(group, key=lambda p: (rank.get(p.id, 999),
+                                                -(p.ca + (boost if p.age <= 24 else 0.0))))
         return sorted(group, key=lambda p: (rank.get(p.id, 999), -p.ca))
 
     def lineup(self, pos, n):

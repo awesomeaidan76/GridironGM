@@ -112,6 +112,9 @@ class Scout:
 
 
 class Owner:
+    spending = None          # 1-20 (front_office.owner_traits fills these in for older saves)
+    meddling = None
+
     def __init__(self):
         self.name = names.random_name()
         self.patience = _clamp(random.gauss(10, 4))       # 1 = trigger-happy, 20 = saint
@@ -345,6 +348,29 @@ def _best_from_pool(lg, role):
     m = max(cands, key=lambda x: x.overall + random.gauss(0, 1.5))
     lg.staff_pool.remove(m)
     return m
+
+
+def peek_coordinator(lg, exclude_team):
+    """A hot coordinator elsewhere who could be hired as a head coach: (team, member) or None."""
+    best = []
+    for t in lg.teams.values():
+        if t is exclude_team:
+            continue
+        for role in ("OC", "DC"):
+            m = t.staff.get(role)
+            if m and m.overall >= 13:
+                best.append((m.overall + t.overall / 40.0, t, m))
+    if not best:
+        return None
+    best.sort(key=lambda x: -x[0])
+    _, t, m = random.choice(best[:5])
+    return t, m
+
+
+def take_coordinator(lg, t, m):
+    """Hire coordinator m away from team t (t refills the job from the pool)."""
+    if t.staff.get(m.role) is m:
+        t.staff[m.role] = _best_from_pool(lg, m.role) or StaffMember(m.role)
 
 
 def promote_coordinator(lg, exclude_team):
