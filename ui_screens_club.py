@@ -5,11 +5,13 @@ Staff and Finances.
 from collections import Counter
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import (QComboBox, QGridLayout, QHBoxLayout, QLabel, QListWidget,
-                             QListWidgetItem, QPushButton, QScrollArea, QSlider, QTabWidget,
+from PyQt6.QtWidgets import (QComboBox, QDoubleSpinBox, QGridLayout, QHBoxLayout, QLabel, QListWidget,
+                             QListWidgetItem, QPushButton, QScrollArea, QSlider, QSpinBox, QTabWidget,
                              QTextBrowser, QVBoxLayout, QWidget)
 
+import capplan
 import free_agency as fa
+import inbox
 import roster_rules as rr
 from coach import COACH_RATINGS, COACH_RATING_LABELS, OFFENSIVE_SCHEMES, DEFENSIVE_SCHEMES
 from contracts import market_value
@@ -110,6 +112,25 @@ class HomeScreen(Screen):
         banner.add(msg)
         self.lay.addWidget(banner)
 
+        items = inbox.action_items(lg)
+        pressing = [it for it in items if it["priority"] <= 2]
+        if pressing:
+            self.lay.addWidget(inbox_card(self.main, items, limit=min(4, len(pressing))))
+        elif items:
+            note = Card()
+            row = QHBoxLayout()
+            lbl = QLabel(f"Nothing needs a decision now. {len(items)} thing{'s' if len(items) > 1 else ''} "
+                         f"worth a look in your inbox, starting with: {items[0]['title']}.")
+            lbl.setObjectName("muted")
+            lbl.setWordWrap(True)
+            row.addWidget(lbl, 1)
+            go = QPushButton("Open Inbox")
+            go.setObjectName("ghost")
+            go.clicked.connect(lambda: self.main.goto("inbox"))
+            row.addWidget(go)
+            note.body.addLayout(row)
+            self.lay.addWidget(note)
+
         # Tiles
         tiles = QHBoxLayout()
         tiles.setSpacing(10)
@@ -156,6 +177,8 @@ class HomeScreen(Screen):
         grid.setColumnStretch(1, 2)
         self.lay.addLayout(grid)
         self.lay.addStretch(1)
+        # Scroll rather than squash the cards when the window is short
+        self.inner.setMinimumHeight(self.inner.sizeHint().height())
 
     def _guidance(self):
         lg, team = self.lg, self.user
@@ -377,6 +400,107 @@ def news_html(items):
     if not rows:
         rows.append(f"<span style='color:{T('muted')}'>Nothing yet.</span>")
     return "".join(rows)
+
+
+# ── Inbox ─────────────────────────────────────────────────────────────────────
+
+PRIORITY_COLORS = {1: "bad", 2: "warn", 3: "info"}
+PRIORITY_WORDS = {1: "ACT NOW", 2: "SOON", 3: "FYI"}
+
+
+def run_inbox_action(main, item, action):
+    """Carry out one inbox button: inline actions, dialogs or navigation."""
+    lg = main.lg
+    if action in inbox.GO:
+        main.goto(inbox.GO[action])
+        return
+    p = lg.find_player(item["pid"]) if item.get("pid") is not None else None
+    if action == "open_player":
+        if p is not None:
+            main.open_player(p.id)
+        return
+    if action == "negotiate":
+        if p is not None:
+            from ui_dialogs import OfferDialog
+            if OfferDialog(main, p, resign=True).exec():
+                main.refresh_all()
+        return
+    if action == "accept_offer" and not confirm(main, "Accept offer", "Accept this trade?"):
+        return
+    if action == "tag" and p is not None and not confirm(
+            main, "Franchise tag", f"Tag {p.name} for one season at {money(rr.tag_amount(lg, p))}?"):
+        return
+    ok, msg = inbox.act(lg, item, action)
+    if not ok or action in ("accept_offer", "tag"):
+        info(main, "Inbox", msg)
+    main.status(msg)
+    main.refresh_all()
+
+
+def inbox_row(main, item):
+    row = QWidget()
+    lay = QHBoxLayout(row)
+    lay.setContentsMargins(0, 2, 0, 2)
+    lay.setSpacing(10)
+    col = T(PRIORITY_COLORS[item["priority"]])
+    text = QLabel(f"<span style='color:{col}; font-weight:800'>{PRIORITY_WORDS[item['priority']]}</span>"
+                  f"&nbsp; <b>{item['title']}</b><br><span style='color:{T('text2')}'>{item['detail']}</span>")
+    text.setTextFormat(Qt.TextFormat.RichText)
+    text.setWordWrap(True)
+    lay.addWidget(text, 1)
+    for i, (action, label) in enumerate(item["actions"]):
+        b = QPushButton(label)
+        if i > 0:
+            b.setObjectName("ghost")
+        b.clicked.connect(lambda _c=False, a=action, it=item: run_inbox_action(main, it, a))
+        lay.addWidget(b)
+    return row
+
+
+def inbox_card(main, items, limit=None, title="Needs a Decision"):
+    shown = items if limit is None else items[:limit]
+    right = None
+    if limit is not None and len(items) > limit:
+        right = QPushButton(f"All {len(items)} ▸")
+        right.setObjectName("ghost")
+        right.clicked.connect(lambda: main.goto("inbox"))
+    card = Card(title, right=right)
+    for i, it in enumerate(shown):
+        if i:
+            card.add(divider())
+        card.add(inbox_row(main, it))
+    return card
+
+
+class InboxScreen(Screen):
+    title = "Inbox"
+    subtitle = "Decisions waiting on you. News stays on the News screen."
+
+    def __init__(self, main):
+        super().__init__(main)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        self.inner = QWidget()
+        self.inner.setObjectName("screen")
+        self.lay = QVBoxLayout(self.inner)
+        self.lay.setContentsMargins(0, 0, 4, 0)
+        self.lay.setSpacing(12)
+        scroll.setWidget(self.inner)
+        self.outer.addWidget(scroll, 1)
+
+    def refresh(self):
+        clear_layout(self.lay)
+        items = inbox.action_items(self.lg)
+        n1 = sum(1 for it in items if it["priority"] == 1)
+        self.set_subtitle(f"{len(items)} item{'s' if len(items) != 1 else ''}"
+                          f"{f', {n1} need action now' if n1 else ''}. News stays on the News screen.")
+        if not items:
+            lbl = QLabel("Nothing needs a decision right now.")
+            lbl.setObjectName("muted")
+            self.lay.addWidget(lbl)
+        else:
+            self.lay.addWidget(inbox_card(self.main, items, title="To Do"))
+        self.lay.addStretch(1)
 
 
 # ── Roster ────────────────────────────────────────────────────────────────────
@@ -1339,6 +1463,166 @@ class FinancesScreen(Screen):
             return
         if confirm(self, "Release player", f"Release {p.name}? Part of his salary becomes dead cap."):
             fa.release(self.lg, self.user, p)
+            self.main.refresh_all()
+
+
+# ── Cap planner ───────────────────────────────────────────────────────────────
+
+PLAN_YEARS = 5
+
+
+class CapPlannerScreen(Screen):
+    title = "Cap Planner"
+    subtitle = "Committed money, dead money and expiring deals for the next five seasons."
+
+    def __init__(self, main):
+        super().__init__(main)
+        self.what_if = {}
+        top = Card("Cap by Season")
+        self.summary = DataTable([""] + [""] * PLAN_YEARS, stretch=0, sortable=False)
+        top.add(self.summary)
+        self.outer.addWidget(top)
+
+        self.table = DataTable(["Name", "Pos", "Age", "OVR"] + [""] * PLAN_YEARS + ["Cut now"], stretch=0)
+        self.table.on_activate = self.main.open_player
+        self.outer.addWidget(self.table, 1)
+
+        wi = Card("What if I extend him?")
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        self.who = QComboBox()
+        self.who.setMinimumWidth(260)
+        self.who.currentIndexChanged.connect(lambda _i: self._ask())
+        row.addWidget(self.who)
+        row.addWidget(QLabel("Years"))
+        self.years = QSpinBox()
+        self.years.setRange(1, 5)
+        row.addWidget(self.years)
+        row.addWidget(QLabel("Per year"))
+        self.apy = QDoubleSpinBox()
+        self.apy.setDecimals(2)
+        self.apy.setRange(0.5, 120.0)
+        self.apy.setSingleStep(0.25)
+        self.apy.setSuffix(" M")
+        row.addWidget(self.apy)
+        prev = QPushButton("Preview")
+        prev.setObjectName("primary")
+        prev.clicked.connect(self._preview)
+        row.addWidget(prev)
+        clr = QPushButton("Clear Previews")
+        clr.setObjectName("ghost")
+        clr.clicked.connect(self._clear)
+        row.addWidget(clr)
+        neg = QPushButton("Negotiate…")
+        neg.clicked.connect(self._negotiate)
+        row.addWidget(neg)
+        row.addStretch(1)
+        wi.body.addLayout(row)
+        self.wi_note = QLabel("")
+        self.wi_note.setObjectName("muted")
+        self.wi_note.setWordWrap(True)
+        wi.add(self.wi_note)
+        self.outer.addWidget(wi)
+
+    def refresh(self):
+        lg, team = self.lg, self.user
+        self.what_if = {pid: v for pid, v in self.what_if.items()
+                        if (p := lg.find_player(pid)) is not None and p.team == team.abbr}
+        pl = capplan.plan(lg, team, PLAN_YEARS, self.what_if)
+        seasons = [str(y) for y in pl["seasons"]]
+        self.summary.columns = [""] + seasons
+        self.summary.setHorizontalHeaderLabels(self.summary.columns)
+        muted = T("muted")
+        rows = [
+            [cell("Projected cap", color=muted)] + [cell(money(v), v) for v in pl["caps"]],
+            [cell("Committed", color=muted)] + [cell(money(v), v) for v in pl["committed"]],
+            [cell("Dead money", color=muted)] + [cell(money(v) if v else "—", v) for v in pl["dead"]],
+            [cell("Cap space", bold=True)] + [cell(money(v), v, color=T("good") if v >= 0 else T("bad"), bold=True)
+                                              for v in pl["space"]],
+            [cell("Players under contract", color=muted)] + list(pl["counts"]),
+            [cell("Deals ending after season", color=muted)] + [
+                cell(str(len(e)), len(e), tip=", ".join(f"{p.position} {p.name}" for p in e[:12]))
+                for e in pl["expiring"]],
+        ]
+        self.summary.set_rows(rows)
+        self.summary.fit_height()
+
+        cols = ["Name", "Pos", "Age", "OVR"] + seasons + ["Cut now"]
+        self.table.columns = cols
+        self.table.setHorizontalHeaderLabels(cols)
+        prows, keys = [], []
+        for r in pl["players"]:
+            p = r["player"]
+            line = [cell(p.name + ("  (preview)" if r["preview"] else ""),
+                         color=accent() if r["preview"] else None),
+                    cell(p.position, POSITIONS.index(p.position)), p.age, ovr_cell(p.ovr)]
+            for k, h in enumerate(r["hits"]):
+                final = h and k == r["last"]
+                line.append(cell(money(h) if h else "", h,
+                                 color=T("warn") if final else None,
+                                 tip="Final year of his deal" if final else None))
+            line.append(cell(f"saves {money(r['cut_saves'])}" if r["cut_saves"] > 0 else
+                             f"costs {money(-r['cut_saves'])}", r["cut_saves"],
+                             tip=f"Releasing him now leaves {money(r['cut_dead'])} of dead money"))
+            prows.append(line)
+            keys.append(p.id)
+        self.table.set_rows(prows, keys)
+        self._fill_who()
+        self.set_subtitle(f"{team.full_name} · cap grows {settings['cap_growth'] * 100:.0f}% a season · "
+                          f"amber = final year of a deal · double-click a player for his profile")
+
+    def _fill_who(self):
+        lg, team = self.lg, self.user
+        cur = self.who.currentData()
+        self.who.blockSignals(True)
+        self.who.clear()
+        cands = sorted((p for p in team.roster if p.contract and
+                        (p.contract["years"] <= 2 or p.id in lg.expiring)),
+                       key=lambda p: -p.ovr)
+        for p in cands:
+            self.who.addItem(f"{p.position} {p.name} ({p.ovr} OVR, {p.contract['years']} yr left)", p.id)
+        idx = self.who.findData(cur) if cur is not None else -1
+        self.who.setCurrentIndex(idx if idx >= 0 else (0 if cands else -1))
+        self.who.blockSignals(False)
+        if cur is None or idx < 0:
+            self._ask()
+
+    def _player(self):
+        pid = self.who.currentData()
+        return self.lg.find_player(pid) if pid is not None else None
+
+    def _ask(self):
+        p = self._player()
+        if p is None:
+            self.wi_note.setText("No one is close to the end of his deal.")
+            return
+        apy, years = capplan.extension_estimate(self.lg, self.user, p)
+        self.years.setValue(years)
+        self.apy.setValue(round(apy / 1e6, 2))
+        dead = capplan.extension_dead_money(p)
+        self.wi_note.setText(f"His agent's opening ask: {money(apy)} a year for {years} years. Market value "
+                             f"{money(market_value(p, self.lg.salary_cap))}."
+                             + (f" Extending now leaves {money(dead)} of his old bonus as dead money this "
+                                f"year." if dead else ""))
+
+    def _preview(self):
+        p = self._player()
+        if p is None:
+            return
+        self.what_if[p.id] = (int(self.apy.value() * 1e6), self.years.value())
+        self.refresh()
+
+    def _clear(self):
+        self.what_if = {}
+        self.refresh()
+
+    def _negotiate(self):
+        p = self._player()
+        if p is None:
+            return
+        from ui_dialogs import OfferDialog
+        if OfferDialog(self.main, p, resign=True).exec():
+            self.what_if.pop(p.id, None)
             self.main.refresh_all()
 
 

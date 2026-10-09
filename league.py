@@ -188,6 +188,7 @@ class League:
         self.fo_log = []           # (year, "offseason"/"midseason", {abbr: plan})
         self.shortlist = []        # player ids the user is watching
         self.shortlist_state = {}  # pid -> (team, injured) at the last check
+        self.trade_block = []      # user's players (ids) and picks (lists) offered to the league
 
     def strength_order(self):
         """Team abbreviations from strongest to weakest roster (cached until something changes)."""

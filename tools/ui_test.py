@@ -152,6 +152,49 @@ def on_exec(dlg):
 _impls.CONFIG["on_exec"] = on_exec
 
 
+def exercise_cap_planner(win, tag):
+    import capplan
+    win.goto("capplan")
+    cp = win.screens["capplan"]
+    assert cp.summary.rowCount() == 6 and cp.table.rowCount() > 0
+    if cp.who.count():
+        cp.who.setCurrentIndex(cp.who.count() - 1)
+        pid = cp.who.currentData()
+        before = capplan.plan(win.lg, win.lg.user_team)["space"]
+        cp.years.setValue(4)
+        cp._preview()
+        after = capplan.plan(win.lg, win.lg.user_team, what_if=cp.what_if)["space"]
+        assert pid in cp.what_if and before != after, (before, after)
+        assert any("(preview)" in cp.table.item(r, 0).text() for r in range(cp.table.rowCount()))
+        cp._clear()
+        assert not cp.what_if
+        cp._negotiate()
+    step(f"cap planner {tag}")
+
+
+INBOX_KINDS = set()
+
+
+def exercise_inbox(win, tag):
+    """Open the inbox and press every kind of button once."""
+    import inbox
+    from ui_screens_club import run_inbox_action
+    win.goto("inbox")
+    done = set()
+    for _ in range(30):
+        todo = [(it, a) for it in inbox.action_items(win.lg) for a, _ in it["actions"]
+                if (it["kind"], a) not in done]
+        if not todo:
+            break
+        it, a = todo[0]
+        done.add((it["kind"], a))
+        INBOX_KINDS.add(it["kind"])
+        run_inbox_action(win, it, a)
+        win.goto("inbox")
+    win.goto("home")
+    step(f"inbox {tag}: {sorted(k for k, _ in done)}")
+
+
 def main():
     random.seed(3)
     # Start + new game dialogs
@@ -258,6 +301,7 @@ def main():
     fin.table.selectRow(0)
     fin._extend()
     step("finances")
+    exercise_cap_planner(win, "preseason")
 
     # Profiles & team dialogs
     some = [lg.user_team.roster[0], lg.free_agents[0], lg.team_list()[3].roster[2]]
@@ -416,6 +460,51 @@ def main():
     tr.offers.setCurrentRow(0)
     tr._decline_offer()
     step("trade offers")
+
+    # Trading block: put a starter on the block, ask every club, haggle, accept
+    win.goto("block")
+    blk = win.screens["block"]
+    star = max((p for p in team.roster if not p.ps and not p.ir and not p.is_injured
+                and p.position not in ("QB", "K", "P")), key=lambda p: p.ovr)
+    assert select_key(blk.mine, star.id)
+    blk._add()
+    assert star.id in lg.trade_block, lg.trade_block
+    pk = next(blk.mine.key_at(r) for r in range(blk.mine.rowCount()) if isinstance(blk.mine.key_at(r), str))
+    assert select_key(blk.mine, pk)
+    blk._add()
+    blk.block.setCurrentRow(1)
+    blk._remove()
+    assert len(lg.trade_block) == 1, lg.trade_block
+    for kind in ("players", "picks", "any"):
+        blk._set_kind(kind)
+        blk._ask()
+        assert blk.offers_table.rowCount() > 0, kind
+    blk.offers_table.selectRow(0)
+    blk._open_in_trades()
+    assert tr.give.count() == 1 and tr.get.count() >= 1
+    tr._make_it_work()
+    win.goto("block")
+    blk._ask()
+    blk.offers_table.selectRow(0)
+    blk._accept()
+    assert star.team != team.abbr, "block trade failed"
+    assert not lg.trade_block
+    step("trading block")
+    win.goto("trades")
+    rich = max(lg.team_list()[12].roster, key=lambda p: p.ovr)
+    tr.preload(rich)
+    tr._make_it_work()
+    if tr.give.count():
+        assert tr._evaluate(), "make it work suggestion was not accepted"
+    step(f"make it work ({tr.give.count()} added)")
+    for _ in range(40):
+        if market.maybe_offer_user(lg, chance=1.0):
+            break
+    offered = {r for o in lg.trade_offers for r in o["get"]}
+    hurt = next(p for p in team.roster if not p.ps and not p.ir and p.position == "CB"
+                and p.id not in offered)
+    hurt.injury = {"name": "Test fracture", "weeks": 8}
+    exercise_inbox(win, "in season")
     win.goto("glossary")
     gl = win.screens["glossary"]
     gl.search.setText("cover")
@@ -462,6 +551,7 @@ def main():
     # Offseason: re-sign window
     win.continue_clicked()
     assert lg.phase == "resign", lg.phase
+    exercise_inbox(win, "resign")
     win.goto("finances")
     fin._set_filter("expiring")
     if fin.table.rowCount():
@@ -472,8 +562,10 @@ def main():
         fin.table.selectRow(0)
         fin._tag()
     step("resign")
+    exercise_cap_planner(win, "resign")
     win.continue_clicked()
     assert lg.phase == "draft", lg.phase
+    exercise_inbox(win, "draft")
     win.goto("draft")
     dr = win.screens["draft"]
     dr._sim()
@@ -494,6 +586,7 @@ def main():
     win.continue_clicked()
     assert lg.phase == "preseason", lg.phase
     visit_all("preseason2")
+    exercise_inbox(win, "preseason")
     win.continue_clicked()
     assert lg.phase == "regular" and lg.week == 0, (lg.phase, lg.week)
     step("new season")
@@ -525,6 +618,7 @@ def main():
     save_manager.delete(path)
     step("save/load")
     assert any(DIAG_SEEN), "no play diagrams were drawn"
+    assert {"offer", "ir", "expiring", "draft"} <= INBOX_KINDS, INBOX_KINDS
     print("negotiations:", [(n, r) for n, r, _ in NEGOTIATIONS][:8])
     assert any(r for _, r, _ in NEGOTIATIONS), NEGOTIATIONS
     print(f"UI test passed: {len(STEPS)} steps, league now {lg.year} {lg.week_label}, "

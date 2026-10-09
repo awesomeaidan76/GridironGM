@@ -15,13 +15,14 @@ there, so porting is a matter of translating it, not inventing it.
 ├──────────────────────────────────────────────────────────────┤
 │ Game flow (no UI code at all)                                │
 │   season.py   — the Continue button: weeks, playoffs, phases │
+│   inbox.py    — decisions waiting on the user (to-do list)   │
 │   save_manager.py — save / load / JSON export                │
 ├──────────────────────────────────────────────────────────────┤
 │ League systems                                               │
 │   free_agency.py, trades.py, market.py, draft.py,            │
 │   roster_rules.py, staff.py, development.py, awards.py,      │
 │   records.py, eras.py, committee.py, schedule.py,            │
-│   contracts.py, negotiation.py, glossary.py                  │
+│   contracts.py, negotiation.py, capplan.py, glossary.py      │
 ├──────────────────────────────────────────────────────────────┤
 │ Match engine                                                 │
 │   engine.py (+ playbook.py, defense.py, specialteams.py,     │
@@ -221,7 +222,10 @@ Every CPU club has three decision makers, all plain data plus small functions:
   - blockbusters for stars by all-in clubs;
   - salary dumps by clubs resetting their cap;
   - gamblers trade up, analytics GMs trade down;
-  - both sides must agree.
+  - both sides must agree;
+  - the user's trading block (`block_offers`): each club's budget is the most it would give and
+    still pass `trades.evaluate`, and it fills that with the best players or picks for the user;
+  - `make_it_work` searches the user's picks and players for the cheapest addition that passes `evaluate`.
 - `draft.board_value`: risk weights ceiling over polish, the BPA trait weights need, and QB search adds weight to quarterbacks.
 - Draft-day trade-downs and trade-ups.
 - `free_agency.ai_free_agency_wave`:

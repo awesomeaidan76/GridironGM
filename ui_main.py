@@ -17,33 +17,36 @@ import season as season_mod
 from settings import settings
 from ui_dialogs import LoadDialog, PlayerDialog, SettingsDialog, TeamDialog
 from ui_live import LiveGameDialog, has_live_data
-from ui_screens_club import (DepthChartScreen, FinancesScreen, HomeScreen, RosterScreen,
-                             StaffScreen, TacticsScreen, GamePlanScreen)
+import inbox
+from ui_screens_club import (CapPlannerScreen, DepthChartScreen, FinancesScreen, HomeScreen, InboxScreen,
+                             RosterScreen, StaffScreen, TacticsScreen, GamePlanScreen)
 from ui_screens_league import (GameCenterScreen, HistoryScreen, NewsScreen, PlayersScreen,
                                PlayoffsScreen, ScheduleScreen, StandingsScreen, StatsScreen,
                                TeamsScreen, GlossaryScreen)
-from ui_screens_moves import DraftScreen, FreeAgencyScreen, TradeScreen
+from ui_screens_moves import DraftScreen, FreeAgencyScreen, TradeScreen, TradingBlockScreen
 from ui_theme import T, accent, stylesheet, palette
 from ui_widgets import TeamBadge, confirm, info
 
 NAV = [
-    ("MY CLUB", [("home", "Home"), ("roster", "Roster"), ("depth", "Depth Chart"),
+    ("MY CLUB", [("home", "Home"), ("inbox", "Inbox"), ("roster", "Roster"), ("depth", "Depth Chart"),
                  ("tactics", "Tactics"), ("gameplan", "Game Plan"), ("staff", "Staff"),
-                 ("finances", "Finances")]),
+                 ("finances", "Finances"), ("capplan", "Cap Planner")]),
     ("LEAGUE", [("schedule", "Schedule"), ("game", "Game Center"), ("standings", "Standings"),
                 ("stats", "Stats"), ("players", "Players"), ("teams", "Teams"),
                 ("playoffs", "Playoffs"), ("history", "History"), ("news", "News"),
                 ("glossary", "Glossary")]),
-    ("TRANSACTIONS", [("draft", "Draft"), ("fa", "Free Agency"), ("trades", "Trades")]),
+    ("TRANSACTIONS", [("draft", "Draft"), ("fa", "Free Agency"), ("trades", "Trades"),
+                      ("block", "Trading Block")]),
 ]
 
 SCREENS = {
-    "home": HomeScreen, "roster": RosterScreen, "depth": DepthChartScreen,
+    "home": HomeScreen, "inbox": InboxScreen, "roster": RosterScreen, "depth": DepthChartScreen,
     "tactics": TacticsScreen, "gameplan": GamePlanScreen, "staff": StaffScreen, "finances": FinancesScreen,
+    "capplan": CapPlannerScreen,
     "schedule": ScheduleScreen, "game": GameCenterScreen, "standings": StandingsScreen,
     "stats": StatsScreen, "players": PlayersScreen, "teams": TeamsScreen,
     "playoffs": PlayoffsScreen, "history": HistoryScreen, "news": NewsScreen,
-    "draft": DraftScreen, "fa": FreeAgencyScreen, "trades": TradeScreen,
+    "draft": DraftScreen, "fa": FreeAgencyScreen, "trades": TradeScreen, "block": TradingBlockScreen,
     "glossary": GlossaryScreen,
 }
 
@@ -249,6 +252,8 @@ class MainWindow(QMainWindow):
                                  f"{lg.week_label} · Cap space "
                                  f"{t.cap_space(lg.salary_cap) / 1e6:.1f}M")
         self.cont_btn.setText(season_mod.continue_label(lg) + "  ▸")
+        n = inbox.urgent_count(lg)
+        self.nav_buttons["inbox"].setText(f"Inbox ({n})" if n else "Inbox")
         self.cont_btn.setEnabled(not self.busy)
         self.sim_btn.setEnabled(not self.busy)
         self.save_btn.setEnabled(not self.busy)
