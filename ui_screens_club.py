@@ -1356,7 +1356,7 @@ class CapPlannerScreen(Screen):
         super().__init__(main)
         self.what_if = {}
         top = Card("Cap by Season")
-        self.summary = DataTable([""] + [""] * PLAN_YEARS, stretch=None, sortable=False)
+        self.summary = DataTable([""] + [""] * PLAN_YEARS, stretch=0, sortable=False)
         top.add(self.summary)
         self.outer.addWidget(top)
 
@@ -1411,9 +1411,9 @@ class CapPlannerScreen(Screen):
         self.summary.setHorizontalHeaderLabels(self.summary.columns)
         muted = T("muted")
         rows = [
-            [cell("Projected cap", color=muted)] + [money(v) for v in pl["caps"]],
-            [cell("Committed", color=muted)] + [money(v) for v in pl["committed"]],
-            [cell("Dead money", color=muted)] + [money(v) if v else "—" for v in pl["dead"]],
+            [cell("Projected cap", color=muted)] + [cell(money(v), v) for v in pl["caps"]],
+            [cell("Committed", color=muted)] + [cell(money(v), v) for v in pl["committed"]],
+            [cell("Dead money", color=muted)] + [cell(money(v) if v else "—", v) for v in pl["dead"]],
             [cell("Cap space", bold=True)] + [cell(money(v), v, color=T("good") if v >= 0 else T("bad"), bold=True)
                                               for v in pl["space"]],
             [cell("Players under contract", color=muted)] + list(pl["counts"]),
