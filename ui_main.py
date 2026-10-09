@@ -17,7 +17,7 @@ import season as season_mod
 from settings import settings
 from ui_dialogs import LoadDialog, PlayerDialog, SettingsDialog, TeamDialog
 from ui_live import LiveGameDialog, has_live_data
-from ui_screens_club import (DepthChartScreen, FinancesScreen, HomeScreen, RosterScreen,
+from ui_screens_club import (CapPlannerScreen, DepthChartScreen, FinancesScreen, HomeScreen, RosterScreen,
                              StaffScreen, TacticsScreen, GamePlanScreen)
 from ui_screens_league import (GameCenterScreen, HistoryScreen, NewsScreen, PlayersScreen,
                                PlayoffsScreen, ScheduleScreen, StandingsScreen, StatsScreen,
@@ -29,7 +29,7 @@ from ui_widgets import TeamBadge, confirm, info
 NAV = [
     ("MY CLUB", [("home", "Home"), ("roster", "Roster"), ("depth", "Depth Chart"),
                  ("tactics", "Tactics"), ("gameplan", "Game Plan"), ("staff", "Staff"),
-                 ("finances", "Finances")]),
+                 ("finances", "Finances"), ("capplan", "Cap Planner")]),
     ("LEAGUE", [("schedule", "Schedule"), ("game", "Game Center"), ("standings", "Standings"),
                 ("stats", "Stats"), ("players", "Players"), ("teams", "Teams"),
                 ("playoffs", "Playoffs"), ("history", "History"), ("news", "News"),
@@ -40,6 +40,7 @@ NAV = [
 SCREENS = {
     "home": HomeScreen, "roster": RosterScreen, "depth": DepthChartScreen,
     "tactics": TacticsScreen, "gameplan": GamePlanScreen, "staff": StaffScreen, "finances": FinancesScreen,
+    "capplan": CapPlannerScreen,
     "schedule": ScheduleScreen, "game": GameCenterScreen, "standings": StandingsScreen,
     "stats": StatsScreen, "players": PlayersScreen, "teams": TeamsScreen,
     "playoffs": PlayoffsScreen, "history": HistoryScreen, "news": NewsScreen,

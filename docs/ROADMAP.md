@@ -26,8 +26,10 @@ Franchise, NBA 2K MyLeague/MyGM, Draft Day Sports, Pro Strategy Football and Mot
   forward navigation (the top complaints about FM26).
 - 🔜 **Trading block.** List players and ask every club for offers, with a "what would make this
   work?" button and filters by asset type (ZenGM).
-- 🔜 **Multi-year cap planner.** Committed money by year, dead money, expiring players and
-  "what if I extend him" (OOTP, FOF8).
+- ✅ **Multi-year cap planner.** My Club → Cap Planner: projected cap, committed money, dead money,
+  cap space and deals ending for the next five seasons, every contract year by year with what a cut
+  would save, and "what if I extend him?" previews priced from his agent's ask (OOTP, FOF8).
+  Logic in `capplan.py`.
 - 🔜 **Glossary hover tooltips.** Show glossary text when hovering over column headers and
   settings sliders, with the league average next to each slider (BBGM reviews).
 

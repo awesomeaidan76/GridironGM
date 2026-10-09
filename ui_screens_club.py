@@ -5,10 +5,11 @@ Staff and Finances.
 from collections import Counter
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import (QComboBox, QGridLayout, QHBoxLayout, QLabel, QListWidget,
-                             QListWidgetItem, QPushButton, QScrollArea, QSlider, QTabWidget,
+from PyQt6.QtWidgets import (QComboBox, QDoubleSpinBox, QGridLayout, QHBoxLayout, QLabel, QListWidget,
+                             QListWidgetItem, QPushButton, QScrollArea, QSlider, QSpinBox, QTabWidget,
                              QTextBrowser, QVBoxLayout, QWidget)
 
+import capplan
 import free_agency as fa
 import roster_rules as rr
 from coach import COACH_RATINGS, COACH_RATING_LABELS, OFFENSIVE_SCHEMES, DEFENSIVE_SCHEMES
@@ -1339,6 +1340,166 @@ class FinancesScreen(Screen):
             return
         if confirm(self, "Release player", f"Release {p.name}? Part of his salary becomes dead cap."):
             fa.release(self.lg, self.user, p)
+            self.main.refresh_all()
+
+
+# ── Cap planner ───────────────────────────────────────────────────────────────
+
+PLAN_YEARS = 5
+
+
+class CapPlannerScreen(Screen):
+    title = "Cap Planner"
+    subtitle = "Committed money, dead money and expiring deals for the next five seasons."
+
+    def __init__(self, main):
+        super().__init__(main)
+        self.what_if = {}
+        top = Card("Cap by Season")
+        self.summary = DataTable([""] + [""] * PLAN_YEARS, stretch=None, sortable=False)
+        top.add(self.summary)
+        self.outer.addWidget(top)
+
+        self.table = DataTable(["Name", "Pos", "Age", "OVR"] + [""] * PLAN_YEARS + ["Cut now"], stretch=0)
+        self.table.on_activate = self.main.open_player
+        self.outer.addWidget(self.table, 1)
+
+        wi = Card("What if I extend him?")
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        self.who = QComboBox()
+        self.who.setMinimumWidth(260)
+        self.who.currentIndexChanged.connect(lambda _i: self._ask())
+        row.addWidget(self.who)
+        row.addWidget(QLabel("Years"))
+        self.years = QSpinBox()
+        self.years.setRange(1, 5)
+        row.addWidget(self.years)
+        row.addWidget(QLabel("Per year"))
+        self.apy = QDoubleSpinBox()
+        self.apy.setDecimals(2)
+        self.apy.setRange(0.5, 120.0)
+        self.apy.setSingleStep(0.25)
+        self.apy.setSuffix(" M")
+        row.addWidget(self.apy)
+        prev = QPushButton("Preview")
+        prev.setObjectName("primary")
+        prev.clicked.connect(self._preview)
+        row.addWidget(prev)
+        clr = QPushButton("Clear Previews")
+        clr.setObjectName("ghost")
+        clr.clicked.connect(self._clear)
+        row.addWidget(clr)
+        neg = QPushButton("Negotiate…")
+        neg.clicked.connect(self._negotiate)
+        row.addWidget(neg)
+        row.addStretch(1)
+        wi.body.addLayout(row)
+        self.wi_note = QLabel("")
+        self.wi_note.setObjectName("muted")
+        self.wi_note.setWordWrap(True)
+        wi.add(self.wi_note)
+        self.outer.addWidget(wi)
+
+    def refresh(self):
+        lg, team = self.lg, self.user
+        self.what_if = {pid: v for pid, v in self.what_if.items()
+                        if (p := lg.find_player(pid)) is not None and p.team == team.abbr}
+        pl = capplan.plan(lg, team, PLAN_YEARS, self.what_if)
+        seasons = [str(y) for y in pl["seasons"]]
+        self.summary.columns = [""] + seasons
+        self.summary.setHorizontalHeaderLabels(self.summary.columns)
+        muted = T("muted")
+        rows = [
+            [cell("Projected cap", color=muted)] + [money(v) for v in pl["caps"]],
+            [cell("Committed", color=muted)] + [money(v) for v in pl["committed"]],
+            [cell("Dead money", color=muted)] + [money(v) if v else "—" for v in pl["dead"]],
+            [cell("Cap space", bold=True)] + [cell(money(v), v, color=T("good") if v >= 0 else T("bad"), bold=True)
+                                              for v in pl["space"]],
+            [cell("Players under contract", color=muted)] + list(pl["counts"]),
+            [cell("Deals ending after season", color=muted)] + [
+                cell(str(len(e)), len(e), tip=", ".join(f"{p.position} {p.name}" for p in e[:12]))
+                for e in pl["expiring"]],
+        ]
+        self.summary.set_rows(rows)
+        self.summary.fit_height()
+
+        cols = ["Name", "Pos", "Age", "OVR"] + seasons + ["Cut now"]
+        self.table.columns = cols
+        self.table.setHorizontalHeaderLabels(cols)
+        prows, keys = [], []
+        for r in pl["players"]:
+            p = r["player"]
+            line = [cell(p.name + ("  (preview)" if r["preview"] else ""),
+                         color=accent() if r["preview"] else None),
+                    cell(p.position, POSITIONS.index(p.position)), p.age, ovr_cell(p.ovr)]
+            for k, h in enumerate(r["hits"]):
+                final = h and k == r["last"]
+                line.append(cell(money(h) if h else "", h,
+                                 color=T("warn") if final else None,
+                                 tip="Final year of his deal" if final else None))
+            line.append(cell(f"saves {money(r['cut_saves'])}" if r["cut_saves"] > 0 else
+                             f"costs {money(-r['cut_saves'])}", r["cut_saves"],
+                             tip=f"Releasing him now leaves {money(r['cut_dead'])} of dead money"))
+            prows.append(line)
+            keys.append(p.id)
+        self.table.set_rows(prows, keys)
+        self._fill_who()
+        self.set_subtitle(f"{team.full_name} · cap grows {settings['cap_growth'] * 100:.0f}% a season · "
+                          f"amber = final year of a deal · double-click a player for his profile")
+
+    def _fill_who(self):
+        lg, team = self.lg, self.user
+        cur = self.who.currentData()
+        self.who.blockSignals(True)
+        self.who.clear()
+        cands = sorted((p for p in team.roster if p.contract and
+                        (p.contract["years"] <= 2 or p.id in lg.expiring)),
+                       key=lambda p: -p.ovr)
+        for p in cands:
+            self.who.addItem(f"{p.position} {p.name} ({p.ovr} OVR, {p.contract['years']} yr left)", p.id)
+        idx = self.who.findData(cur) if cur is not None else -1
+        self.who.setCurrentIndex(idx if idx >= 0 else (0 if cands else -1))
+        self.who.blockSignals(False)
+        if cur is None or idx < 0:
+            self._ask()
+
+    def _player(self):
+        pid = self.who.currentData()
+        return self.lg.find_player(pid) if pid is not None else None
+
+    def _ask(self):
+        p = self._player()
+        if p is None:
+            self.wi_note.setText("No one is close to the end of his deal.")
+            return
+        apy, years = capplan.extension_estimate(self.lg, self.user, p)
+        self.years.setValue(years)
+        self.apy.setValue(round(apy / 1e6, 2))
+        dead = capplan.extension_dead_money(p)
+        self.wi_note.setText(f"His agent's opening ask: {money(apy)} a year for {years} years. Market value "
+                             f"{money(market_value(p, self.lg.salary_cap))}."
+                             + (f" Extending now leaves {money(dead)} of his old bonus as dead money this "
+                                f"year." if dead else ""))
+
+    def _preview(self):
+        p = self._player()
+        if p is None:
+            return
+        self.what_if[p.id] = (int(self.apy.value() * 1e6), self.years.value())
+        self.refresh()
+
+    def _clear(self):
+        self.what_if = {}
+        self.refresh()
+
+    def _negotiate(self):
+        p = self._player()
+        if p is None:
+            return
+        from ui_dialogs import OfferDialog
+        if OfferDialog(self.main, p, resign=True).exec():
+            self.what_if.pop(p.id, None)
             self.main.refresh_all()
 
 

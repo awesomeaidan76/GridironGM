@@ -21,7 +21,7 @@ there, so porting is a matter of translating it, not inventing it.
 │   free_agency.py, trades.py, market.py, draft.py,            │
 │   roster_rules.py, staff.py, development.py, awards.py,      │
 │   records.py, eras.py, committee.py, schedule.py,            │
-│   contracts.py, negotiation.py, glossary.py                  │
+│   contracts.py, negotiation.py, capplan.py, glossary.py      │
 ├──────────────────────────────────────────────────────────────┤
 │ Match engine                                                 │
 │   engine.py (+ playbook.py, defense.py, specialteams.py,     │

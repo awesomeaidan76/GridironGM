@@ -152,6 +152,26 @@ def on_exec(dlg):
 _impls.CONFIG["on_exec"] = on_exec
 
 
+def exercise_cap_planner(win, tag):
+    import capplan
+    win.goto("capplan")
+    cp = win.screens["capplan"]
+    assert cp.summary.rowCount() == 6 and cp.table.rowCount() > 0
+    if cp.who.count():
+        cp.who.setCurrentIndex(cp.who.count() - 1)
+        pid = cp.who.currentData()
+        before = capplan.plan(win.lg, win.lg.user_team)["space"]
+        cp.years.setValue(4)
+        cp._preview()
+        after = capplan.plan(win.lg, win.lg.user_team, what_if=cp.what_if)["space"]
+        assert pid in cp.what_if and before != after, (before, after)
+        assert any("(preview)" in cp.table.item(r, 0).text() for r in range(cp.table.rowCount()))
+        cp._clear()
+        assert not cp.what_if
+        cp._negotiate()
+    step(f"cap planner {tag}")
+
+
 def main():
     random.seed(3)
     # Start + new game dialogs
@@ -258,6 +278,7 @@ def main():
     fin.table.selectRow(0)
     fin._extend()
     step("finances")
+    exercise_cap_planner(win, "preseason")
 
     # Profiles & team dialogs
     some = [lg.user_team.roster[0], lg.free_agents[0], lg.team_list()[3].roster[2]]
@@ -463,6 +484,7 @@ def main():
         fin.table.selectRow(0)
         fin._tag()
     step("resign")
+    exercise_cap_planner(win, "resign")
     win.continue_clicked()
     assert lg.phase == "draft", lg.phase
     win.goto("draft")
