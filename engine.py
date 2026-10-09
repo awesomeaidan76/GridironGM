@@ -1025,7 +1025,7 @@ class GameSim:
         acc = self.e(k, "kick_accuracy")
         power = self.e(k, "kick_power")
         comp = self.e(k, "composure")
-        d50 = 58.0 + (acc - 69) * 0.50 + (power - 69) * 0.32 + (comp - 70) * 0.06
+        d50 = 56.0 + (acc - 69) * 0.50 + (power - 69) * 0.32 + (comp - 70) * 0.06
         d50 += (self.fg_mult - 1.0) * 30
         return _sig((d50 - dist - self.wx["fg_dist"]) / 7.0)
 
