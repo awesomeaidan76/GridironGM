@@ -24,6 +24,7 @@ import roster_rules as rr
 import eras
 import front_office as fo
 import free_agency as fa
+import position_fit as fit
 from coach import hire_from_tree, generate_coach
 from development import develop, retirement_chance
 from engine import simulate_game
@@ -77,10 +78,12 @@ def start_new_season(lg, first=False):
                     old, new, note = develop(p, team, last_season=last)
                     _development_news(lg, p, team, old, new, note)
                 _offseason_heal(p)
+                fit.offseason_decay(p, last)
         for p in lg.free_agents:
             p.age += 1
             develop(p, None, last_season=last)
             _offseason_heal(p)
+            fit.offseason_decay(p, last)
         for c in [t.coach for t in lg.teams.values()] + lg.coach_pool:
             c.age += 1
         # AI rosters must be legal
@@ -137,6 +140,7 @@ def start_new_season(lg, first=False):
         user.tactics = default_tactics()
     staff_mod.ensure_league(lg)
     fo.ensure(lg)
+    fo.weekly_depth_all(lg, news=not first)
     staff_mod.set_expectation(lg)
     # Next spring's draft class plays its college season now; scouts watch it all year
     draft_mod.generate_class(lg)
@@ -261,6 +265,7 @@ def _post_week(lg, results):
                 d *= 1.3 - temper / 100.0 * 0.6
                 p.morale = int(max(1, min(100, p.morale + d + (65 - p.morale) * 0.05)))
 
+    _position_learning(lg, results)
     _performance_news(lg, results)
     nego.weekly_holdouts(lg)
     for yr, wk, award, pid, name, pos, abbr, text in awards_mod.player_of_the_week(lg, results):
@@ -282,6 +287,19 @@ def _post_week(lg, results):
             fa.ai_cutdown(lg, team, settings["roster_size"])
         elif fa.active_count(team) < settings["roster_size"]:
             rr.fill_active_roster(lg, team)
+    fo.weekly_depth_all(lg)
+
+
+def _position_learning(lg, results, teams=None):
+    """Players listed away from their own position learn it from the week's reps and snaps."""
+    snaps = {}
+    for res in results:
+        for pid, d in (getattr(res, "slot_snaps", None) or {}).items():
+            mine = snaps.setdefault(pid, {})
+            for slot, n in d.items():
+                mine[slot] = mine.get(slot, 0) + n
+    for team in (teams if teams is not None else lg.teams.values()):
+        fit.weekly_learning(team, snaps, lg.year)
 
 
 def _performance_news(lg, results):
@@ -407,6 +425,7 @@ def play_playoff_round(lg):
             if name == "Conference Championship":
                 lg.teams[res.winner].conf_titles += 1
         _post_playoff_injuries(lg)
+    _position_learning(lg, results, [lg.teams[a] for r in results for a in (r.home, r.away)])
     lg.playoff_results[name] = results
     if lg.user_abbr:
         for res in results:

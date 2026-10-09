@@ -55,6 +55,65 @@ anchored to the distribution of its starters (`ratings.OVR_ANCHORS`).
 **Role ratings** re-weight a position's attribute weights with the
 archetype's modifiers (`ratings._role_weights`).
 
+## 2b. Depth charts and playing out of position: `position_fit.py`, `team.py`
+
+**Slots.** The depth chart has the 14 positions plus KR and PR
+(`position_fit.DEPTH_SLOTS`, starters per slot in `STARTERS`, how deep the
+engine reads each list in `GAME_DEPTH`). Any player can be listed at any slot.
+A slot's pool is the players whose own position it is plus anyone listed there
+(`Team.depth_overrides[slot]`, the user's order) or chosen by a CPU staff
+(`Team.cpu_oop`). `Team.depth(slot)` returns the pool in order: listed players
+first, then the rest by `depth_score` (rating at the slot, `NATURAL_BONUS` = 8
+CA at his own position, plus the youth boost for CPU clubs).
+`Team.depth_auto` keeps every slot sorted by that score; `depth_locks[slot]`
+holds players at their place whenever a slot is sorted. `auto_order` adds a
+player from another position only when he beats the weakest natural starter by
+the bonus and doesn't start anywhere else.
+
+**Slot rating.** `Player.rating_at(slot)` is the player's own CA at his
+position, and elsewhere `position_fit.slot_ca`: the slot's formula
+(`ratings.compute_ca`) on his attributes plus `slot_deltas(p, slot)`:
+
+- *Size fit.* Weight beyond the slot's normal range (`player.SIZE` mean ±
+  `SIZE_TOL` = 1.25 sd), in sd, softly capped at `SIZE_CAP` = 4: every
+  non-mental attribute the slot weights loses `FRAME` (2.2) per sd, plus
+  `UNDER_ATTRS` (strength, blocking, shedding, run stopping, tackle-breaking,
+  balance, hit power, tackling) when light, or `OVER_ATTRS` (speed,
+  acceleration, agility, jumping, stamina) when heavy. QB, K and P ignore size.
+- *Familiarity* (0-100; 100 at his own position). `Player.familiarity`
+  {slot: value} holds what he has learned; otherwise he starts at
+  `RELATED[own][slot]` (`DEFAULT_START` = 5). The penalty is
+  `FAM_MAX (18) × ((100 - f) / 100) ^ 1.35` attribute points: mental attributes
+  in full, techniques his own position never uses (or any slot he knows at 90+)
+  at `NEW_TECH` (0.7), the ones it does at `KNOWN_TECH` (0.3). Physical
+  attributes are never affected.
+
+The match engine adds the same `slot_deltas` to his attributes on every snap he
+plays at that slot, so the rating and the sim agree. Natural ratings never
+change. POT at a slot (`slot_pot_ca`, `Player.pot_range_at`) is the rating at
+full familiarity plus his remaining growth × the share of the slot's formula
+his own position's weights cover (`coverage`). Results are cached per player
+(`_fit_cache`, cleared by `recalc` and familiarity changes, never saved).
+
+**Learning** (`weekly_learning`, called from `season._post_week` and after
+each playoff round): a player on a slot's list who isn't natural there gains
+`learn_rate × PRACTICE_SHARE (0.5) × reps` a week (reps 1.0 for starters, 0.6
+for the next man, 0.3 for the one after him), plus `learn_rate × 0.5 × min(1, snaps/45)`
+from the snaps he played there (`GameResult.slot_snaps`). `learn_rate =
+(3 + 0.12 × starting familiarity) × max(0.4, 0.55 + 0.9 × adaptability/100 +
+(awareness - 60)/200)` (adaptability is a hidden trait): about four weeks for tackle to guard, more than a season for
+receiver to corner. Each offseason (`offseason_decay`) a player keeps 90% of
+what he learned above his starting point at a slot he played last season, 65%
+otherwise.
+
+**CPU clubs** (`front_office.weekly_depth`, weekly and at season start): any
+non-starter who rates at least `oop_margin` CA above the weakest natural
+starter at a slot starts there (`OOP_MARGIN` 17, minus up to 6 for reputation
+over 50, minus 0.4 per point of the head coach's adaptability over 10, at
+least 7). One move per slot, one slot per player; news on each new move.
+Injury cover on game day stays in `Team.lineup` (`FALLBACK` positions, then
+the whole roster, by rating at the slot).
+
 ## 3. A game: `engine.GameSim`
 
 1. **Setup.**
@@ -75,30 +134,44 @@ archetype's modifiers (`ratings._role_weights`).
    gives a little back (less in a no-huddle), the sideline a lot, quarter breaks, timeouts and halftime more.
    Part of each snap's cost is "wear" that caps recovery until halftime. Below 86 energy, physical attributes
    lose `FAT_SLOPE` points per point (mental ones 30% of that) and injury risk rises. Before every snap
-   `_rotate` compares each starter's rating, discounted by fatigue, with fresher backups (position and
-   user rotation style set how readily), and the better option plays. Snap counts are recorded.
-   Blowouts late in the fourth quarter send the backups in.
-4. **Game plans.** At kickoff each defensive coordinator scouts the opponent (`defense.scout`): pressure,
+   `_rotate` compares each starter's value with fresher backups (position and user rotation style set how
+   readily) and the better option plays. The depth order wins: a player's value is the best rating at or
+   below his place on the list, discounted by his own fatigue, so a backup only comes in to rest a tired
+   starter, never because he rates higher. Snap counts are recorded. Blowouts late in the fourth quarter
+   send the backups in.
+4. **Slots on every snap.** `_formation` and `_defense_set` fill the field in order (QB and line, back,
+   tight ends, receivers; defensive line, linebackers, corners, safeties) and skip anyone already placed,
+   so a player listed at two slots plays one per snap and the next man takes the other. `_snap_units`
+   receives the slot of every player: drain is by slot (`DRAIN`), `GameSim._at` applies his
+   `position_fit.slot_deltas` (read by `e()`), snaps away from his position are counted in
+   `GameResult.slot_snaps`, and each unfamiliar player blows his assignment with probability
+   `BUST_RATE (0.05) × unfamiliarity ^ 1.2`. A bust loses his pass-protection rep (his rusher comes free),
+   his run-blocking or run-fit matchup (`trenches.run_matchups(bust=...)`) or his coverage (+9 openness for
+   the receiver); a receiver who busts ran the wrong route (-7). A receiver lined up at back or tight end
+   draws a safety in coverage when one is free. Unfamiliar players also raise their unit's
+   penalty odds (`PENALTY_RATE` 0.30 × unfamiliarity each) and are likelier to be the one flagged. The
+   trenches code asks `pos(player)`, the slot he is playing, for every role check.
+5. **Game plans.** At kickoff each defensive coordinator scouts the opponent (`defense.scout`): pressure,
    coverage and shell leans, box count, QB spy, bracket target, shadow corner, with errors that shrink with
    the coordinator's rating. The user's Game Plan choices override it. At quarter breaks (mostly halftime)
    `defense.adjust` leans the defence against what is working and the offence leans toward it.
-5. **Line play** (`trenches.py`). Pass protection assigns every rusher a blocker (tackles on edges,
+6. **Line play** (`trenches.py`). Pass protection assigns every rusher a blocker (tackles on edges,
    guards on interior rushers, spare linemen slide toward the most dangerous rusher, TEs/backs chip or pick up
    blitzers); each matchup is a one-on-one won on the two players' attributes, with more time for the rush on
    longer-developing plays (`PASS_RUSH_BASE` calibrates the pressure rate). The first winner is the pressure
    and the beaten blocker is charged. Run blocking pairs blockers and defenders at the point of attack (and on
    the backside); the average margin is the blocking edge `bd`.
-6. **Quarterback decisions.** `_progression` orders the concept's reads, the QB perceives openness with noise
+7. **Quarterback decisions.** `_progression` orders the concept's reads, the QB perceives openness with noise
    that shrinks with decision making, throws when a read clears his threshold (gunslingers lower, later reads
    lower), else checks down, forces it or throws it away. Each extra read adds time for the rush. Smart QBs
    spot blitzes pre-snap and throw hot.
-7. **Situations** (`situations.py`). A win-probability model (lead, time, expected points of the possession,
+8. **Situations** (`situations.py`). A win-probability model (lead, time, expected points of the possession,
    pre-game edge) drives 4th-down and 2-point decisions, bent by each coach's aggression and game management
    (`FOURTH_CAUTION`, `TWO_CAUTION`). Timeouts, spikes, onside timing and the two-/four-minute clock are
    decided there too. Coaches' aggression drifts with league-wide 4th-down results (`eras.adapt_coaching`).
-8. **Grades** (`grades.py`) turn each game's stat line into a 0-100 grade per player (per-position baseline and
+9. **Grades** (`grades.py`) turn each game's stat line into a 0-100 grade per player (per-position baseline and
    scale in `POS_NORM`), stored merge-safely as `grade_pts`/`grade_n`.
-9. **Momentum** is a single value from -1 to +1 that shifts on big plays and turnovers, then fades. It nudges effective attributes, scaled by each player's temperament.
+10. **Momentum** is a single value from -1 to +1 that shifts on big plays and turnovers, then fades. It nudges effective attributes, scaled by each player's temperament.
 
 Every probability in the engine has a **calibration constant**. The NFL
 targets are checked by `tools/calibrate.py` (league averages) and
@@ -178,6 +251,8 @@ weekly, in `_post_week` (plus single-game records after every game):
 - news is written;
 - scouts learn about prospects;
 - the owner's confidence moves;
+- players learn the slots they are listed at away from their own position (`position_fit.weekly_learning`);
+- CPU staffs review out-of-position starters (`front_office.weekly_depth`);
 - AI teams manage IR and the practice squad and sign depth;
 - AI teams trade with each other;
 - holdouts settle, report or drag on;

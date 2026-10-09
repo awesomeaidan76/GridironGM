@@ -26,6 +26,7 @@ import advanced as adv_lib
 import trenches
 import grades
 import situations as sit_lib
+import position_fit as fit
 from coach import sit_tendency, SCHEME_EXECUTION
 
 QUARTER = 900
@@ -104,6 +105,7 @@ class GameResult:
         #                     home win prob x1000, momentum x100, home has ball)
         self.states = []
         self.diagrams = []                # parallel to plays: play diagram dict or None
+        self.slot_snaps = {}              # pid -> {slot: snaps} for snaps away from his own position
 
     @property
     def winner(self):
@@ -147,18 +149,37 @@ class Side:
 
     def refresh_lineup(self):
         t = self.team
-        self.lu = {
-            "QB": t.lineup("QB", 2), "RB": t.lineup("RB", 3), "FB": t.lineup("FB", 1),
-            "WR": t.lineup("WR", 5), "TE": t.lineup("TE", 3), "OT": t.lineup("OT", 2),
-            "IOL": t.lineup("IOL", 3), "DT": t.lineup("DT", 4),
-            "EDGE": t.lineup("EDGE", 4), "LB": t.lineup("LB", 4),
-            "CB": t.lineup("CB", 4), "S": t.lineup("S", 3), "K": t.lineup("K", 1),
-            "P": t.lineup("P", 1),
-        }
+        self.lu = {pos: t.lineup(pos, n) for pos, n in fit.GAME_DEPTH.items()}
+        self._more = {}
         self.kr = t.returner("KR")
         self.pr = t.returner("PR")
-        self.ol = self.lu["OT"][:1] + self.lu["IOL"][:3] + self.lu["OT"][1:2]
+        # The line: LT, LG, C, RG, RT - nobody twice (a player listed at tackle and guard
+        # plays tackle, and the next guard on the list steps in)
+        used = {p.id for p in self.lu["QB"][:1]}
+
+        def take(pos, k):
+            got = []
+            for p in self.lu[pos] + self.more(pos):
+                if len(got) >= k:
+                    break
+                if p.id not in used:
+                    got.append(p)
+                    used.add(p.id)
+            return got
+        ots = take("OT", 2)
+        iol = take("IOL", 3)
+        self.ol = ots[:1] + iol + ots[1:2]
+        self.ol_slots = ["OT"] * len(ots[:1]) + ["IOL"] * len(iol) + ["OT"] * len(ots[1:2])
         self._backfield()
+        self.sim._prime(self)
+
+    def more(self, pos):
+        """A longer list for a slot, for when the same player is wanted in two places at once."""
+        got = self._more.get(pos)
+        if got is None:
+            got = self.team.lineup(pos, fit.GAME_DEPTH.get(pos, 1) + 4)
+            self._more[pos] = got
+        return got
 
     def _backfield(self):
         """
@@ -177,8 +198,9 @@ class Side:
         c = self.plan.get("committee", 0.45)
         share = 1.04 - 0.30 * c
         if rb2 is not None:
+            # the depth chart decides who leads; a better back behind him only means a closer split
             gap = rb1.rating_at("RB") - rb2.rating_at("RB")
-            share += max(-0.14, min(0.16, gap / 65.0))
+            share += max(-0.05, min(0.16, gap / 65.0))
         share += (rb1.a("stamina") - 72) / 240.0
         share += {"Workhorse": 0.08, "Power Back": 0.02, "Elusive Back": -0.02,
                   "Receiving Back": -0.09}.get(rb1.archetype, 0.0)
@@ -213,6 +235,11 @@ class GameSim:
     def __init__(self, home, away, week=0, season=0, playoff=None,
                  neutral=False, keep_pbp=True, rules=None, diagrams=False):
         self.res = GameResult(home.abbr, away.abbr, week, season, playoff)
+        self._adj = {}                  # pid -> {attr: change} at the slot he is playing (position_fit)
+        self._adj_cache = {}            # (pid, slot) -> that dict
+        self._fam = {}                  # (pid, slot) -> familiarity at kickoff
+        self._slot_now = {}             # pid -> slot he lined up at on the latest snap
+        self._bust = set()              # players who blew their assignment this snap
         self.home = Side(home, True, self)
         self.away = Side(away, False, self)
         self.playoff = playoff
@@ -347,13 +374,70 @@ class GameSim:
         return out
 
     def e(self, p, attr):
-        """Effective attribute for this game (talent + form + momentum - fatigue)."""
+        """Effective attribute for this game (talent + form + momentum - fatigue +/- slot fit)."""
         v = p.attrs.get(attr, 30) + self.form.get(p.id, 0.0) + \
             self.mom_sens.get(p.id, 0.0) * self.mom_pts
         pen = self.fat.get(p.id)
         if pen:
             v -= pen if attr in PHYSICAL else pen * 0.3
+        adj = self._adj.get(p.id)
+        if adj:
+            v += adj.get(attr, 0.0)
         return v
+
+    # ── Playing out of position (position_fit.py) ────────────────────────────
+
+    def _at(self, p, slot):
+        """He lines up at `slot` this snap: his size fit and familiarity there apply."""
+        if p is None:
+            return
+        self._slot_now[p.id] = slot
+        if slot == p.position:
+            if p.id in self._adj:
+                del self._adj[p.id]
+            return
+        key = (p.id, slot)
+        adj = self._adj_cache.get(key)
+        if adj is None:
+            adj = fit.slot_deltas(p, slot)
+            self._adj_cache[key] = adj
+            self._fam[key] = fit.familiarity(p, slot)
+        self._adj[p.id] = adj
+
+    def _prime(self, side):
+        """Kickers, punters and the starting quarterback play only their own slot."""
+        lu = side.lu
+        for slot in ("K", "P", "QB"):
+            if lu.get(slot):
+                self._at(lu[slot][0], slot)
+
+    def _kicker(self, side):
+        k = side.lu["K"][0]
+        self._at(k, "K")
+        return k
+
+    def _punter(self, side):
+        p = side.lu["P"][0]
+        self._at(p, "P")
+        return p
+
+    def _pos(self, p):
+        """The slot a player is playing right now (his own position if we don't know)."""
+        return self._slot_now.get(p.id, p.position)
+
+    def _flag_odds(self, side, unit):
+        """(rate multiplier, unfamiliar players) for a unit's penalty chances this snap."""
+        unf = getattr(side, "unf_off" if unit == "off" else "unf_def", None)
+        if not unf:
+            return 1.0, ()
+        return 1.0 + fit.PENALTY_RATE * sum(u for _, u in unf), unf
+
+    @staticmethod
+    def _culprit(unf, mult, default):
+        """Who drew the flag: an unfamiliar player in proportion to the extra risk he adds."""
+        if unf and random.random() < 1.0 - 1.0 / mult:
+            return random.choices([p for p, _ in unf], weights=[u for _, u in unf], k=1)[0]
+        return default
 
     # ── Fatigue & rotation ───────────────────────────────────────────────────
 
@@ -385,39 +469,59 @@ class GameSim:
             self._rat[key] = r
         return r
 
-    def _value(self, side, p, pos, k):
-        en = self.energy_of(p)
-        return self._rating(p, pos) * (1.0 - k * max(0.0, 94.0 - en) / 100.0 * 1.15)
-
-    def _rotate(self, side, pos, n, lock=False):
-        """The n players a position group puts on the field this snap (starters first)."""
+    def _rotate(self, side, pos, n, lock=False, used=None):
+        """
+        The n players a position group puts on the field this snap (starters first).
+        The depth chart's order wins: a player is never benched for a better player
+        listed behind him, only rested when he is tired (each player counts as good
+        as the best man listed below him). `used`: players already on the field at
+        another slot this snap, who are skipped.
+        """
         pool = side.lu.get(pos, [])
+        if used:
+            free = [p for p in pool if p.id not in used]
+            if len(free) < len(pool) and len(free) < n + 1:
+                # someone on this list is already on the field elsewhere: read further down it
+                free += [p for p in side.more(pos) if p.id not in used and p not in free]
+            pool = free
         out = list(pool[:n])
-        if len(pool) <= n:
-            return out
-        bench = list(pool[n:n + 3])
-        if self._garbage(side):
-            # mop-up time: the backups play
-            return (bench + out)[:n] if pos != "QB" else out
-        if lock:
-            return out
-        style = (getattr(side.team, "rotation", None) or {}).get(ROT_GROUP.get(pos, ""), "normal")
-        k = POS_ROTATION.get(pos, 0.8) * ROTATION_STYLE.get(style, 1.0)
-        if k <= 0:
-            return out
-        val = {p.id: self._value(side, p, pos, k) for p in out + bench}
-        for i, s in enumerate(out):
-            if not bench:
-                break
-            b = max(bench, key=lambda x: val[x.id])
-            if val[b.id] > val[s.id] * 1.03:
-                out[i] = b
-                bench.remove(b)
-                bench.append(s)
+        if len(pool) > n:
+            bench = list(pool[n:n + 3])
+            if self._garbage(side):
+                # mop-up time: the backups play
+                if pos != "QB":
+                    out = (bench + out)[:n]
+            elif not lock:
+                style = (getattr(side.team, "rotation", None) or {}).get(ROT_GROUP.get(pos, ""), "normal")
+                k = POS_ROTATION.get(pos, 0.8) * ROTATION_STYLE.get(style, 1.0)
+                if k > 0:
+                    cand = out + bench
+                    env = [self._rating(p, pos) for p in cand]
+                    for i in range(len(env) - 2, -1, -1):
+                        if env[i + 1] > env[i]:
+                            env[i] = env[i + 1]
+                    val = {}
+                    for i, p in enumerate(cand):
+                        en = self.energy_of(p)
+                        val[p.id] = env[i] * (1.0 - k * max(0.0, 94.0 - en) / 100.0 * 1.15)
+                    for i, s_ in enumerate(out):
+                        if not bench:
+                            break
+                        b = max(bench, key=lambda x: val[x.id])
+                        if val[b.id] > val[s_.id] * 1.03:
+                            out[i] = b
+                            bench.remove(b)
+                            bench.append(s_)
+        if used is not None:
+            used.update(p.id for p in out)
         return out
 
-    def _snap_units(self, off_players, def_players):
-        """Everyone on the field takes a snap: snap counts, energy drain, sideline recovery."""
+    def _snap_units(self, off_players, def_players, off_slots=None, def_slots=None):
+        """
+        Everyone on the field takes a snap: snap counts, energy drain (by the slot he
+        is playing), sideline recovery, and for anyone away from his own position his
+        size fit and familiarity there - and the chance he blows his assignment.
+        """
         heat = 1.0
         if self.weather:
             t = self.weather.get("temp", 60)
@@ -426,18 +530,36 @@ class GameSim:
         huddle = HUDDLE_REC * (0.35 if self.no_huddle else 1.0)
         on = set()
         ps = self.res.player_stats
-        for players, key in ((off_players, "off_snaps"), (def_players, "def_snaps")):
-            for p in players:
+        bust = self._bust
+        bust.clear()
+        unf_off, unf_def = [], []
+        if self.poss is not None:
+            self.poss.unf_off = unf_off
+            self.dfn.unf_def = unf_def
+        for players, key, slots, unf in ((off_players, "off_snaps", off_slots, unf_off),
+                                         (def_players, "def_snaps", def_slots, unf_def)):
+            for i, p in enumerate(players):
                 if p is None or p.id in on:
                     continue
                 on.add(p.id)
+                slot = slots[i] if slots is not None and i < len(slots) else p.position
+                self._at(p, slot)
+                if slot != p.position:
+                    ss = self.res.slot_snaps.setdefault(p.id, {})
+                    ss[slot] = ss.get(slot, 0) + 1
+                    f = self._fam.get((p.id, slot), 100.0)
+                    if f < 100.0:
+                        unf.append((p, (100.0 - f) / 100.0))
+                        if random.random() < fit.BUST_RATE * ((100.0 - f) / 100.0) ** 1.2:
+                            bust.add(p.id)
+                            self.st(p, "busts")
                 line = ps.get(p.id)
                 if line is None:
                     self.st(p, key)
                 else:
                     line[key] += 1
                 stam = p.attrs.get("stamina", 60)
-                cost = DRAIN.get(p.position, 1.0) * (1.55 - stam / 100.0) * heat * rate
+                cost = DRAIN.get(slot, 1.0) * (1.55 - stam / 100.0) * heat * rate
                 self.wear[p.id] = self.wear.get(p.id, 0.0) + cost * WEAR_FRAC
                 if p.id not in self._rec:
                     self._rec[p.id] = SIDELINE_REC * (0.7 + p.a("stamina") / 250.0)
@@ -626,7 +748,7 @@ class GameSim:
                     between = random.gauss(38.0 - 9.0 * (tempo - 0.5), 2.0) / self.pace
             if clock_runs_after and between > 0:
                 # Timeouts to stop the clock
-                k = self.poss.lu["K"][0]
+                k = self._kicker(self.poss)
                 fg_ok = 100 - self.yl + 17 <= self.fg_range(k)
                 diff = self.poss.score - self.dfn.score
                 after = self.clock - elapsed
@@ -810,7 +932,7 @@ class GameSim:
     def kickoff(self, kicking, onside=False, from_yl=35):
         recv = self.other(kicking)
         self.poss, self.dfn = kicking, recv
-        k = kicking.lu["K"][0]
+        k = self._kicker(kicking)
         needed = onside or (self.quarter == 4 and recv.score > kicking.score and
                             sit_lib.should_onside(recv.score - kicking.score, self.clock, kicking.timeouts))
         ret = recv.kr
@@ -906,7 +1028,7 @@ class GameSim:
         self._start_drive(recv, yl)
 
     def punt(self):
-        p = self.poss.lu["P"][0]
+        p = self._punter(self.poss)
         ret = self.dfn.pr
         rcall = self.st_def or self._st_def_call("punt")
         self.st_def = None
@@ -1033,7 +1155,7 @@ class GameSim:
         return 55 + (self.e(k, "kick_power") - 69) * 0.42 - self.wx["fg_dist"]
 
     def field_goal(self):
-        k = self.poss.lu["K"][0]
+        k = self._kicker(self.poss)
         dist = 100 - self.yl + 17
         dcall = self.st_def or self._st_def_call("fg")
         self.st_def = None
@@ -1096,7 +1218,7 @@ class GameSim:
             else:
                 self.log("Two-point conversion FAILS", "score")
         else:
-            k = side.lu["K"][0]
+            k = self._kicker(side)
             self.st(k, "xpa")
             if random.random() < self.fg_probability(k, self.pat_dist) * 0.995:
                 self.st(k, "xpm")
@@ -1124,7 +1246,7 @@ class GameSim:
         diff = side.score - self.other(side).score     # after the TD
         if self.quarter >= 5:
             return False
-        k = side.lu["K"][0]
+        k = self._kicker(side)
         xp = self.fg_probability(k, self.pat_dist) * 0.995
         secs = self._secs_left()
         if self.quarter <= 2:
@@ -1148,7 +1270,7 @@ class GameSim:
 
     def _fourth_down(self):
         """Return 'go', 'punt' or 'fg'."""
-        k = self.poss.lu["K"][0]
+        k = self._kicker(self.poss)
         dist = 100 - self.yl + 17
         diff = self.poss.score - self.dfn.score
         in_range = dist <= self.fg_range(k)
@@ -1171,7 +1293,7 @@ class GameSim:
 
         # Everything else: compare win probability for going, punting and kicking,
         # bent by how much this coach trusts the numbers
-        p = self.poss.lu["P"][0]
+        p = self._punter(self.poss)
         st = {"diff": diff, "secs": self._secs_left() if self.quarter <= 4 else 1800.0, "yl": self.yl,
               "togo": self.togo, "fg_prob": fg_p, "fg_range_ok": in_range and fg_p > 0.05,
               "punt_net": 39 + (p.a("punt_power") - 70) * 0.12, "edge": self._edge_for(self.poss),
@@ -1270,7 +1392,7 @@ class GameSim:
             self._kneel()
             return
         diff = self.poss.score - self.dfn.score
-        k = self.poss.lu["K"][0]
+        k = self._kicker(self.poss)
         fg_dist = 100 - self.yl + 17
         in_range = fg_dist <= self.fg_range(k) + 3
         late_kick = self.clock <= 6 or (self.clock <= 14 and self.poss.timeouts == 0)
@@ -1512,13 +1634,16 @@ class GameSim:
 
     def _pre_snap_penalty(self):
         rate = 0.034 * self.pen_rate
-        off_disc = 1.35 - self.poss.disc / 100.0 * 0.7
-        def_disc = 1.35 - self.dfn.disc / 100.0 * 0.7
+        om, ounf = self._flag_odds(self.poss, "off")
+        dm, dunf = self._flag_odds(self.dfn, "def")
+        off_disc = (1.35 - self.poss.disc / 100.0 * 0.7) * om
+        def_disc = (1.35 - self.dfn.disc / 100.0 * 0.7) * dm
         r = random.random()
         if r < rate * off_disc * 0.55:
             name = random.choice(["False start", "False start", "Delay of game",
                                   "Illegal formation"])
             p = random.choice(self.poss.ol) if name == "False start" else self.poss.qb
+            p = self._culprit(ounf, om, p)
             self._penalty(self.poss, p, name, 5)
             self.yl = max(1, self.yl - 5)
             self.togo += 5
@@ -1528,6 +1653,7 @@ class GameSim:
         if r < rate * (off_disc * 0.55 + def_disc * 0.45):
             name = random.choice(["Offside", "Neutral zone infraction", "Encroachment"])
             p = random.choice(self.dfn.lu["DT"][:2] + self.dfn.lu["EDGE"][:2])
+            p = self._culprit(dunf, dm, p)
             yds = min(5, (100 - self.yl) // 2) if self.yl > 90 else 5
             self._penalty(self.dfn, p, name, yds)
             self.yl += yds
@@ -1584,11 +1710,31 @@ class GameSim:
         te_n = {"11": 1, "12": 2, "21": 1, "10": 0, "22": 2}[pers]
         fb = pers in ("21", "22")
         side = self.poss
-        wrs = self._rotate(side, "WR", wr_n)
-        tes = self._rotate(side, "TE", te_n) if te_n else []
+        # One spot per player per snap: the quarterback and the line first, then the back,
+        # tight ends and receivers; a player listed twice plays the first, the next man the other
+        used = {p.id for p in side.ol}
+        qb = side.qb
+        if qb is not None:
+            used.add(qb.id)
         rb = self._pick_rb()
-        fbp = lu["FB"][0] if fb and lu["FB"] else None
+        if rb is not None and rb.id in used:
+            rb = next((p for p in lu["RB"] + side.more("RB") if p.id not in used), None)
+        if rb is not None:
+            used.add(rb.id)
+        tes = self._rotate(side, "TE", te_n, used=used) if te_n else []
+        wrs = self._rotate(side, "WR", wr_n, used=used)
+        fbp = next((p for p in lu["FB"] + side.more("FB") if p.id not in used), None) \
+            if fb and lu["FB"] else None
         return wrs, tes, rb, fbp
+
+    def _off_slots(self, off, wrs, tes):
+        """Slot labels for _snap_units, parallel to [qb] + ol + wrs + tes + [rb, fbp]."""
+        return ["QB"] + off.ol_slots + ["WR"] * len(wrs) + ["TE"] * len(tes) + ["RB", "FB"]
+
+    @staticmethod
+    def _def_slots(dts, edges, lbs, cbs, ss):
+        return ["DT"] * len(dts) + ["EDGE"] * len(edges) + ["LB"] * len(lbs) + \
+            ["CB"] * len(cbs) + ["S"] * len(ss)
 
     def _pick_rb(self):
         side = self.poss
@@ -1663,15 +1809,18 @@ class GameSim:
         front = self.dfn.plan["front"]
         d = self.dfn
         lock = self.no_huddle             # no time to substitute against a no-huddle offense
-        dts = self._rotate(d, "DT", 2, lock)
-        edges = self._rotate(d, "EDGE", 2, lock)
+        used = set()
+        dts = self._rotate(d, "DT", 2, lock, used)
+        edges = self._rotate(d, "EDGE", 2, lock, used)
         n_lb, n_cb, n_s = (1, 4, 3) if wr_count >= 4 else (2, 3, 2) if wr_count == 3 else (3, 2, 2)
         if front == "3-4" and wr_count <= 2 and len(lu["DT"]) > 0:
+            for p in dts[1:]:
+                used.discard(p.id)
             dts = dts[:1]
             n_lb = 4
-        lbs = self._rotate(d, "LB", n_lb, lock)
-        cbs = self._rotate(d, "CB", n_cb, lock)
-        ss = self._rotate(d, "S", n_s, lock)
+        lbs = self._rotate(d, "LB", n_lb, lock, used)
+        cbs = self._rotate(d, "CB", n_cb, lock, used)
+        ss = self._rotate(d, "S", n_s, lock, used)
         return dts, edges, lbs, cbs, ss
 
     # ── Unit strengths ───────────────────────────────────────────────────────
@@ -1730,7 +1879,8 @@ class GameSim:
         pers = self._personnel()
         wrs, tes, rb, fbp = self._formation(pers)
         dts, edges, lbs, cbs, ss = self._defense_set(len(wrs))
-        self._snap_units([qb] + off.ol + wrs + tes + [rb, fbp], dts + edges + lbs + cbs + ss)
+        self._snap_units([qb] + off.ol + wrs + tes + [rb, fbp], dts + edges + lbs + cbs + ss,
+                         self._off_slots(off, wrs, tes), self._def_slots(dts, edges, lbs, cbs, ss))
         to_goal = 100 - self.yl
         self.ts(off, "plays")
 
@@ -1880,9 +2030,15 @@ class GameSim:
             pa_bonus = _clip(5.0 - (lb_bite - 65) * 0.12 + (e(qb, "play_action") - 70) * 0.06, 1.0, 9.0)
             if call.get("trick") == "flea":
                 pa_bonus += 9.0
+        bust = self._bust
         for r, role, prior in cands:
             d = cov.get(r.id)
             o = self._openness(r, d, ptype, zone, blitz)
+            if bust:
+                if d is not None and d.id in bust:
+                    o += 9.0                     # blown coverage: nobody went with him
+                if r.id in bust:
+                    o -= 7.0                     # he ran the wrong route
             if bracket:
                 o += -9.0 if r is star else 2.5
             if pa:
@@ -1939,7 +2095,13 @@ class GameSim:
         if hot:
             time_req -= 0.30
         rlist = [(p, kinds.get(p.id, "blitz")) for p, _ in rushers]
-        prot = trenches.assign_protection(off.ol, keep_in, rlist)
+        prot = trenches.assign_protection(off.ol, keep_in, rlist, pos=self._pos)
+        if self._bust:
+            # a blocker who blew his assignment leaves his man free (a double-team partner may still be there)
+            for x in prot:
+                if x["blockers"] and x["blockers"][0].id in self._bust:
+                    x["blockers"] = x["blockers"][1:]
+                    x["chip"] = False
         probs = trenches.contest_pass(e, prot, PASS_RUSH_BASE, time_req, stunt=stunt)
         probs = [(_sig(math.log(max(1e-6, p) / max(1e-6, 1 - p)) + edge_add / 15.0), mg + edge_add)
                  for p, mg in probs]
@@ -2179,7 +2341,7 @@ class GameSim:
                 pr *= 0.55
             out.append((t, "TE1" if i == 0 else "TE2", pr))
         if rb:
-            pr = 1.85 * (0.45 + 0.55 * rb.a("catching") / 65.0)
+            pr = 1.85 * (0.45 + 0.55 * rb.a("catching") / 65.0) * busy(rb)
             if ptype == "screen":
                 pr *= 2.6
             elif ptype == "medium":
@@ -2210,7 +2372,9 @@ class GameSim:
         for r, role, _ in cands:
             if r.id in cov:
                 continue
-            if role.startswith("TE"):
+            if r.position in ("WR", "CB") and not role.startswith("WR") and pool_s:
+                cov[r.id] = pool_s.pop(0)              # a receiver lined up in the backfield draws a safety
+            elif role.startswith("TE"):
                 if pool_s and random.random() < 0.5:
                     cov[r.id] = pool_s.pop(0)
                 elif pool_lb:
@@ -2398,7 +2562,7 @@ class GameSim:
         beat = ""
         if not coverage_sack and win_m and win_m["blockers"]:
             b = win_m["blockers"][0]
-            beat = f" (beat {b.position} {_short(b.name)})"
+            beat = f" (beat {self._pos(b)} {_short(b.name)})"
         elif not coverage_sack and win_m and not win_m["blockers"]:
             beat = " (unblocked)"
         out = {"kind": "sack", "yards": -loss, "time": 6, "clock_runs": True,
@@ -2541,7 +2705,8 @@ class GameSim:
         pers = self._personnel()
         wrs, tes, rb, fbp = self._formation(pers)
         dts, edges, lbs, cbs, ss = self._defense_set(len(wrs))
-        self._snap_units([qb] + off.ol + wrs + tes + [rb, fbp], dts + edges + lbs + cbs + ss)
+        self._snap_units([qb] + off.ol + wrs + tes + [rb, fbp], dts + edges + lbs + cbs + ss,
+                         self._off_slots(off, wrs, tes), self._def_slots(dts, edges, lbs, cbs, ss))
         self.ts(off, "plays")
         slot_of = self._slot_map(pers, wrs, tes, rb, fbp)
         dc = self._def_call(len(cbs))
@@ -2653,7 +2818,7 @@ class GameSim:
         front = dts + edges
         lead = fbp if (fbp is not None and carrier is not fbp) else None
         bd, blk_events = trenches.run_matchups(e, off.ol, tes, lead, front, lbs, ss, not outside,
-                                               self._run_side, wts)
+                                               self._run_side, wts, pos=self._pos, bust=self._bust)
         extra = sum((e(t, "run_block") - 55) * 0.05 for t in tes)
         extra += (staff_mod.off_calling(off.team) - 10) * 0.3
         box = {1: -5.0, 2: -2.5, 3: 0.0, 4: 1.5}.get(len(lbs), 0.0)
@@ -2858,7 +3023,7 @@ class GameSim:
 
     def _finish_run(self, carrier, yards, outside, tacklers, front, label=None):
         off = self.poss
-        if self._spy_on and carrier is not None and carrier.position == "QB" and yards > 2:
+        if self._spy_on and carrier is not None and self._pos(carrier) == "QB" and yards > 2:
             yards = int(yards * 0.7)              # the spy was waiting for him
         if self._adv is None:
             self._adv = {"rusher": carrier}
@@ -3030,7 +3195,7 @@ class GameSim:
                 # Free kick from the 20
                 self.poss, self.dfn = off, scoring
                 self.yl = 20
-                p = off.lu["P"][0]
+                p = self._punter(off)
                 dist = int(random.gauss(45 + (self.e(p, "punt_power") - 70) * 0.15, 5))
                 self._start_drive(scoring, _clip(100 - 20 - dist + random.randint(5, 15), 15, 50))
             return
@@ -3075,8 +3240,10 @@ class GameSim:
 
     def _post_snap_penalty(self, out):
         rate = 0.058 * self.pen_rate
-        off_disc = 1.35 - self.poss.disc / 100.0 * 0.7
-        def_disc = 1.35 - self.dfn.disc / 100.0 * 0.7
+        om, ounf = self._flag_odds(self.poss, "off")
+        dm, dunf = self._flag_odds(self.dfn, "def")
+        off_disc = (1.35 - self.poss.disc / 100.0 * 0.7) * om
+        def_disc = (1.35 - self.dfn.disc / 100.0 * 0.7) * dm
         r = random.random()
         yards = out.get("yards", 0)
         hold = self.rx["holding"]
@@ -3089,6 +3256,7 @@ class GameSim:
                 name, p = "Offensive pass interference", out.get("carrier") or self.poss.lu["WR"][0]
             else:
                 name, p = "Offensive holding", random.choice(self.poss.ol + self.poss.lu["TE"][:1])
+                p = self._culprit(ounf, om, p)
             yds = 10 if self.yl > 20 else max(1, self.yl // 2)
             self._undo_play_stats(out)
             self._penalty(self.poss, p, name, yds)
@@ -3113,6 +3281,7 @@ class GameSim:
                                       weights=[1, 1, 1, self.rx["roughing"], 1])[0] if is_pass else \
                     random.choice(["Face mask", "Unnecessary roughness", "Defensive holding"])
                 p = random.choice(self.dfn.lu["CB"][:2] + self.dfn.lu["LB"][:2] + self.dfn.lu["EDGE"][:2])
+                p = self._culprit(dunf, dm, p)
                 yds = 5 if name in ("Defensive holding", "Illegal contact") else 15
                 # Declined if the play gained more and moved the chains
                 if yards >= yds and yards >= self.togo and name in ("Defensive holding", "Illegal contact"):

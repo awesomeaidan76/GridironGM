@@ -6,6 +6,11 @@ import random
 from ratings import (POSITIONS, ROSTER_TEMPLATE, ROSTER_MINIMUM, POSITION_VALUE,
                      stars_for)
 from coach import Coach
+from position_fit import STARTERS, RETURN_SLOTS
+
+# Auto sort's preference for a player's own position (CA points): someone out of
+# position only goes ahead of a natural player when he is clearly better there
+NATURAL_BONUS = 8.0
 
 # When a position runs dry (injuries), who can fill in
 FALLBACK = {
@@ -60,6 +65,9 @@ class Team:
     plan = None              # the front office's current plan (front_office.PLANS)
     power = None             # who controls the roster: "GM-led", "Coach-led" or "Owner-run"
     youth_boost = 0.0        # extra depth-chart credit for young players (rebuilding clubs play the kids)
+    depth_auto = False       # keep every depth chart slot auto sorted (locked players stay where they are)
+    depth_locks = None       # {slot: [player ids]} players auto sort never moves
+    cpu_oop = None           # {slot: [player ids]} players a CPU staff has chosen to start out of position
 
     def __init__(self, abbr, city, name, conference, division, colors):
         self.abbr = abbr
@@ -118,9 +126,10 @@ class Team:
     def remove_player(self, player):
         if player in self.roster:
             self.roster.remove(player)
-        for pos, ids in self.depth_overrides.items():
-            if player.id in ids:
-                ids.remove(player.id)
+        for groups in (self.depth_overrides, self.depth_locks or {}, self.cpu_oop or {}):
+            for ids in groups.values():
+                if player.id in ids:
+                    ids.remove(player.id)
         player.team = None
 
     @property
@@ -157,22 +166,138 @@ class Team:
         return out
 
     # ── Depth chart ──────────────────────────────────────────────────────────
+    # Any player can be listed at any slot. A slot's pool is the players whose
+    # own position it is plus anyone the user (or a CPU staff) has put there;
+    # the list order is the user's, with unlisted players after them by rating.
 
-    def depth(self, pos, include_injured=False):
-        """Players at a position in depth order (user overrides first)."""
-        group = [p for p in self.roster if p.position == pos and not p.ps
-                 and (include_injured or (not p.is_injured and not p.ir and not p.holdout))]
-        order = self.depth_overrides.get(pos, [])
-        rank = {pid: i for i, pid in enumerate(order)}
-        boost = self.youth_boost if self.tactics is None else 0.0
+    def depth_score(self, p, slot):
+        """How auto sort ranks a player at a slot: his rating there, a small bonus at his own position."""
+        v = p.rating_at(slot)
+        if p.position == slot:
+            v += NATURAL_BONUS
         if self.tactics is None:
+            boost = self.youth_boost
             yt = getattr(self.coach, "youth_trust", None)
             if yt is not None:
                 boost += (yt - 0.5) * 4.0          # the head coach's trust in young players
-        if boost:
-            return sorted(group, key=lambda p: (rank.get(p.id, 999),
-                                                -(p.ca + (boost if p.age <= 24 else 0.0))))
-        return sorted(group, key=lambda p: (rank.get(p.id, 999), -p.ca))
+            if boost and p.age <= 24:
+                v += boost
+        return v
+
+    def _listed(self, slot):
+        ids = list(self.depth_overrides.get(slot, []))
+        if self.tactics is None and self.cpu_oop:
+            ids += [pid for pid in self.cpu_oop.get(slot, []) if pid not in ids]
+        return ids
+
+    def slot_pool(self, slot):
+        """Everyone who belongs on a slot's list (practice squad aside)."""
+        byid = {p.id: p for p in self.roster}
+        pool = [p for p in self.roster if p.position == slot and not p.ps]
+        seen = {p.id for p in pool}
+        for pid in self._listed(slot):
+            p = byid.get(pid)
+            if p is not None and not p.ps and pid not in seen:
+                pool.append(p)
+                seen.add(pid)
+        return pool
+
+    def _locked_order(self, slot, auto):
+        """Put locked players back at their places in the current list; the rest fill around them."""
+        locks = (self.depth_locks or {}).get(slot)
+        if not locks:
+            return auto
+        cur = self.depth_overrides.get(slot, [])
+        ids = {p.id for p in auto}
+        fixed = {}
+        for pid in locks:
+            if pid in cur and pid in ids:
+                fixed[min(cur.index(pid), len(auto) - 1)] = pid
+        if not fixed:
+            return auto
+        byid = {p.id: p for p in auto}
+        rest = iter([p for p in auto if p.id not in fixed.values()])
+        out = []
+        for i in range(len(auto)):
+            if i in fixed and byid[fixed[i]] not in out:
+                out.append(byid[fixed[i]])
+            else:
+                nxt = next(rest, None)
+                if nxt is not None:
+                    out.append(nxt)
+        out += list(rest)
+        return out
+
+    def full_depth(self, slot):
+        """A slot's whole list, injured players included, in game-day order."""
+        pool = self.slot_pool(slot)
+        if self.depth_auto and self.tactics is not None:
+            auto = sorted(pool, key=lambda p: -self.depth_score(p, slot))
+            return self._locked_order(slot, auto)
+        rank = {pid: i for i, pid in enumerate(self._listed(slot))}
+        return sorted(pool, key=lambda p: (rank.get(p.id, 999), -self.depth_score(p, slot)))
+
+    def depth(self, pos, include_injured=False):
+        """Players at a slot in depth order (the user's order first)."""
+        out = self.full_depth(pos)
+        if include_injured:
+            return out
+        return [p for p in out if not p.is_injured and not p.ir and not p.holdout]
+
+    def starter_ids(self, exclude=None):
+        """Players starting at any slot (optionally ignoring one slot)."""
+        out = set()
+        for slot, n in STARTERS.items():
+            if slot in RETURN_SLOTS or slot == exclude:
+                continue
+            out.update(p.id for p in self.depth(slot)[:n])
+        return out
+
+    def auto_order(self, slot, margin=NATURAL_BONUS, busy=None):
+        """
+        The best order for a slot: everyone already on it plus anyone out of position
+        who is clearly better there than a natural starter (by `margin`), and not
+        starting somewhere else. Locked players keep their places.
+        """
+        pool = self.slot_pool(slot)
+        n = STARTERS.get(slot, 1)
+        busy = self.starter_ids(exclude=slot) if busy is None else busy
+        natural = sorted((p for p in pool if p.position == slot and _active(p) and not p.is_injured),
+                         key=lambda p: -p.rating_at(slot))
+        bar = natural[n - 1].rating_at(slot) if len(natural) >= n else 0
+        seen = {p.id for p in pool}
+        for p in self.roster:
+            if p.id in seen or p.ps or p.id in busy or not _active(p) or p.is_injured:
+                continue
+            if p.rating_at(slot) >= bar + margin:
+                pool.append(p)
+        auto = sorted(pool, key=lambda p: -self.depth_score(p, slot))
+        # drop out-of-position players who would not start there (unless the user listed them)
+        listed = set(self.depth_overrides.get(slot, []))
+        keep = []
+        for i, p in enumerate(auto):
+            if p.position != slot and p.id not in listed and i >= n:
+                continue
+            keep.append(p)
+        return self._locked_order(slot, keep)
+
+    def auto_sort(self, slot):
+        """Write the auto order into a slot's list (the depth chart's Auto Sort button)."""
+        self.depth_overrides[slot] = [p.id for p in self.auto_order(slot)]
+
+    def auto_sort_all(self):
+        for slot in POSITIONS:
+            self.auto_sort(slot)
+
+    def two_slot_starters(self):
+        """{player id: [slots]} for players listed as a starter at more than one slot."""
+        seen = {}
+        for slot, n in STARTERS.items():
+            if slot in RETURN_SLOTS:
+                continue
+            for p in self.depth(slot)[:n]:
+                seen.setdefault(p.id, []).append(slot)
+        return {pid: s for pid, s in seen.items() if len(s) > 1}
 
     def lineup(self, pos, n):
         """n healthy players for a position, borrowing from others if short."""
@@ -181,7 +306,7 @@ class Team:
             used = {p.id for p in out}
             pool = []
             for alt in FALLBACK.get(pos, []):
-                pool += [p for p in self.depth(alt) if p.id not in used]
+                pool += [p for p in self.depth(alt) if p.id not in used and p not in pool]
             pool.sort(key=lambda p: -p.rating_at(pos))
             out += pool[:n - len(out)]
         if len(out) < n:
