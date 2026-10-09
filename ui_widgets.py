@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QFrame, QHBoxLayout, QHeaderView
 
 from contracts import fmt_money
 from ratings import stars_text
+import ui_state
 from settings import settings
 from ui_theme import T, accent, attr_color, ca_color, ovr_color, fs
 
@@ -152,6 +153,10 @@ def info(parent, title, text):
 
 # ── Table ─────────────────────────────────────────────────────────────────────
 
+def _order_int(order):
+    return 1 if order == Qt.SortOrder.DescendingOrder else 0
+
+
 class SortItem(QTableWidgetItem):
     """Table item that sorts by a numeric key when one is provided."""
 
@@ -205,11 +210,35 @@ class DataTable(QTableWidget):
         hh.sortIndicatorChanged.connect(self._sort_changed)
         self.cellDoubleClicked.connect(self._double_clicked)
         self.on_activate = None
+        self._state_key = None
+        self._pending_sort = None
         self.setSortingEnabled(False)
 
     def _sort_changed(self, section, order):
         if not self._internal:
             self._user_sorted = True
+            if self._state_key:
+                ui_state.set(f"table.{self._state_key}", [int(section), _order_int(order)])
+
+    def remember(self, key):
+        """Keep this table's sort order between sessions under `key`."""
+        self._state_key = key
+        st = ui_state.get(f"table.{key}")
+        if isinstance(st, list) and len(st) == 2:
+            self._pending_sort = st
+            self._apply_pending_sort()
+
+    def _apply_pending_sort(self):
+        """Restore a remembered sort once the table has that column (some tables get columns later)."""
+        st = self._pending_sort
+        if st is None or not 0 <= st[0] < self.columnCount():
+            return
+        self._pending_sort = None
+        self._internal = True
+        self.horizontalHeader().setSortIndicator(
+            st[0], Qt.SortOrder.DescendingOrder if st[1] else Qt.SortOrder.AscendingOrder)
+        self._internal = False
+        self._user_sorted = True
 
     def _double_clicked(self, row, col):
         if self.on_activate is not None:
@@ -218,9 +247,11 @@ class DataTable(QTableWidget):
                 self.on_activate(key)
 
     def set_rows(self, rows, keys=None):
+        self._apply_pending_sort()
         hh = self.horizontalHeader()
         sort_col = hh.sortIndicatorSection()
         sort_order = hh.sortIndicatorOrder()
+        scroll = self.verticalScrollBar().value()
         self.setSortingEnabled(False)
         # Drop the old rows rather than clearContents(): refilling a table that has been sorted
         # with clearContents() is quadratic in Qt 6 (a 1,500-row Players list took minutes).
@@ -261,6 +292,9 @@ class DataTable(QTableWidget):
                 hh.setSortIndicator(-1, Qt.SortOrder.AscendingOrder)
                 self.setSortingEnabled(True)
             self._internal = False
+        # Keep the scroll position when the same table is refilled
+        bar = self.verticalScrollBar()
+        bar.setValue(min(scroll, bar.maximum()))
 
     def key_at(self, row):
         item = self.item(row, 0)
@@ -513,8 +547,14 @@ def screen_header(title, subtitle=""):
     return w
 
 
-def filter_chips(options, on_change, initial=None):
-    """A row of mutually exclusive chip buttons. Returns (widget, getter)."""
+def filter_chips(options, on_change, initial=None, state_key=None):
+    """A row of mutually exclusive chip buttons. Returns (widget, getter).
+
+    With state_key, the choice is remembered between sessions (the getter returns the restored value)."""
+    if state_key:
+        saved = ui_state.get(f"chips.{state_key}")
+        if saved in [v for v, _ in options]:
+            initial = saved
     w = QWidget()
     lay = QHBoxLayout(w)
     lay.setContentsMargins(0, 0, 0, 0)
@@ -524,6 +564,8 @@ def filter_chips(options, on_change, initial=None):
 
     def pick(value):
         state["value"] = value
+        if state_key:
+            ui_state.set(f"chips.{state_key}", value)
         for b, v in buttons:
             b.setChecked(v == value)
         on_change(value)
@@ -537,6 +579,7 @@ def filter_chips(options, on_change, initial=None):
         lay.addWidget(b)
         buttons.append((b, value))
     lay.addStretch(1)
+    w.pick = pick
     return w, (lambda: state["value"])
 
 

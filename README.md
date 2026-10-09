@@ -14,6 +14,8 @@ On other systems: `pip install PyQt6` then `python main.py`.
 
 ## Controls
 - Continue = Ctrl+Space, Save = Ctrl+S. The Sim menu jumps further ahead.
+- Back / Forward through the screens you visited = Alt+Left / Alt+Right (or the ◀ ▶ buttons).
+- Tables remember how you sorted them and filter chips remember your choice (`ui_state.json`).
 - Game menu: Save As, Load, Export League to JSON, Settings.
 
 ## Latest changes (version 7)

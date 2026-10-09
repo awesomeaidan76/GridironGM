@@ -24,8 +24,10 @@ Franchise, NBA 2K MyLeague/MyGM, Draft Day Sports, Pro Strategy Football and Mot
   candidates, injured-reserve candidates, positions short of healthy starters, roster and cap
   limits and draft picks apart from news, with buttons to act on each inline (as in FM27's inbox
   redesign). Logic lives in `inbox.py`.
-- 🔜 **Persistent table state.** Keep sort, filters and scroll position per screen, plus back and
-  forward navigation (the top complaints about FM26).
+- ✅ **Persistent table state.** Every table keeps its sort order between sessions and its scroll
+  position when it refreshes; filter chips (Roster, Finances, Standings, Stats, News, Draft, Free
+  Agency) are remembered too (`ui_state.json`). Back and forward buttons in the top bar, or
+  Alt+Left / Alt+Right, step through the screens you visited (the top complaints about FM26).
 - ✅ **Trading block.** Put players and picks on the block (Transactions → Trading Block), ask every
   club for offers made of anything, players only or picks only, then accept one or open it in Trades
   to haggle. The Trades screen has a "What would make this work?" button that finds the smallest

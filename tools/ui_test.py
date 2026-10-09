@@ -26,6 +26,9 @@ ui_main.log_error = lambda text: ERRORS.append(text)
 import settings as settings_mod  # noqa: E402
 settings_mod.SETTINGS_FILE = os.path.join(HERE, "tools", "_test_settings.json")
 settings_mod.settings.set("autosave", False)
+import ui_state  # noqa: E402
+ui_state.STATE_FILE = os.path.join(HERE, "tools", "_test_ui_state.json")
+ui_state.reset()
 
 app = QApplication([])
 ui_main.apply_palette(app)
@@ -214,6 +217,19 @@ def main():
 
     win = MainWindow(lg)
     step("main window")
+    for key in ("roster", "stats", "players"):
+        win.goto(key)
+    win.go_back()
+    assert win.current == "stats", win.current
+    win.go_back()
+    assert win.current == "roster", win.current
+    win.go_forward()
+    assert win.current == "stats", win.current
+    win.goto("home")
+    assert not win.fwd_btn.isEnabled()
+    win.go_forward()
+    assert win.current == "home"
+    step("back and forward")
 
     def visit_all(tag):
         for key in ui_main.SCREENS:
@@ -601,12 +617,30 @@ def main():
     win.toggle_theme()
     visit_all("light theme")
     win.toggle_theme()
+    # Table sort and filter chips are remembered for the next window / session
+    win.goto("roster")
+    from PyQt6.QtCore import Qt
+    hdr = win.screens["roster"].table.horizontalHeader()
+    hdr.setSortIndicator(3, Qt.SortOrder.DescendingOrder)
+    hdr.sortIndicatorChanged.emit(3, Qt.SortOrder.DescendingOrder)     # what a header click does
+    win.goto("news")
+    lay = win.screens["news"].outer
+    next(lay.itemAt(i).widget() for i in range(lay.count())
+         if hasattr(lay.itemAt(i).widget(), "pick")).pick("Trade")
+    assert win.screens["news"].cat == "Trade"
     path = save_manager.save(lg, "ui test")
     lg2 = save_manager.load(path)
     win2 = MainWindow(lg2)
+    assert win2.screens["news"].cat == "Trade", win2.screens["news"].cat
+    win2.goto("roster")
+    rt = win2.screens["roster"].table
+    assert rt._user_sorted and rt._pending_sort is None, (rt._user_sorted, rt._pending_sort)
+    step("table and filter memory")
     for key in ui_main.SCREENS:
         win2.goto(key)
     save_manager.delete(path)
+    if os.path.exists(ui_state.STATE_FILE):
+        os.remove(ui_state.STATE_FILE)
     step("save/load")
     assert any(DIAG_SEEN), "no play diagrams were drawn"
     assert {"offer", "ir", "expiring", "draft"} <= INBOX_KINDS, INBOX_KINDS
