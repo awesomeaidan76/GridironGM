@@ -38,7 +38,7 @@ DEF_POS = {"DT", "EDGE", "LB", "CB", "S"}
 # rushers burn it fastest); the huddle gives a little back, the sideline a lot.
 # Tired players lose physical sharpness and get hurt more, so coaches rotate.
 RUN_BLOCK_SHIFT = 0.0      # calibration offset for the matchup-based run blocking edge
-PASS_RUSH_BASE = -2.40      # per-matchup log-odds of a rusher winning (calibrated to NFL pressure rates)
+PASS_RUSH_BASE = -2.46      # per-matchup log-odds of a rusher winning (calibrated to NFL pressure rates)
 DRAIN = {"QB": 0.35, "RB": 1.9, "FB": 1.5, "WR": 1.25, "TE": 1.35, "OT": 0.75, "IOL": 0.75,
          "DT": 3.0, "EDGE": 2.6, "LB": 1.45, "CB": 1.1, "S": 1.0, "K": 0.0, "P": 0.0}
 HUDDLE_REC = 0.6           # per snap, on the field, normal tempo
@@ -175,7 +175,7 @@ class Side:
         rb1 = rbs[0]
         rb2 = rbs[1] if len(rbs) > 1 else None
         c = self.plan.get("committee", 0.45)
-        share = 0.99 - 0.30 * c
+        share = 1.01 - 0.30 * c
         if rb2 is not None:
             gap = rb1.rating_at("RB") - rb2.rating_at("RB")
             share += max(-0.14, min(0.16, gap / 65.0))
@@ -1632,7 +1632,7 @@ class GameSim:
         if gp >= 3:
             per_game = ss.get("rush_att", 0) / gp
             if per_game > 20.5:
-                share -= (per_game - 20.5) * 0.03
+                share -= (per_game - 20.5) * 0.05
         share = _clip(share, 0.25, 0.95)
         if random.random() < share:
             side.rb1_streak += 1
@@ -1850,61 +1850,6 @@ class GameSim:
                              "cov": coverage, "front": dc["front"], "blitz": blitz, "dcall": dc["name"],
                              "n_lb": len(lbs), "n_cb": len(cbs), "n_s": len(ss), "pa": pa}
 
-        # Protection: every rusher against his blocker(s)
-        edge_add = dfn_lib.FRONTS[dc["front"]]["rush"] \
-            + (staff_mod.def_calling(de.team) - staff_mod.off_calling(off.team)) * 0.35
-        if dc["sim"]:
-            edge_add += 2.0 - (e(qb, "progression_reads") - 70) * 0.10
-        if dc["rush"] == 3:
-            edge_add -= 6.0
-        stunt = 0.0
-        if dc["stunt"]:
-            # Line games: a sharp, experienced line passes them off; a green one gives up a free rusher
-            ol_aw = sum(e(p, "awareness") for p in off.ol) / max(1, len(off.ol))
-            stunt = 1.5 - (ol_aw - 70) * 0.18 + random.gauss(0, 3.0)
-        time_req = {"screen": -1.3, "short": -0.40, "medium": 0.18, "deep": 0.48,
-                    "hail": 0.6}[ptype]
-        if pa:
-            time_req += 0.30 if not call.get("trick") else 0.55
-        if call.get("rpo"):
-            time_req -= 0.6
-        # The quarterback's clock: quick processors get the ball out before the rush arrives
-        time_req += (70 - e(qb, "decision_making")) / 250.0
-        rlist = [(p, kinds.get(p.id, "blitz")) for p, _ in rushers]
-        prot = trenches.assign_protection(off.ol, keep_in, rlist)
-        probs = trenches.contest_pass(e, prot, PASS_RUSH_BASE, time_req, stunt=stunt)
-        probs = [(_sig(math.log(max(1e-6, p) / max(1e-6, 1 - p)) + edge_add / 15.0), mg + edge_add)
-                 for p, mg in probs]
-        win_m, all_wins = trenches.resolve_pass_rush(e, prot, probs)
-        pressured = win_m is not None
-        self._prot_record(prot, all_wins, win_m)
-        self._rush_winner = win_m
-
-        # Sack / scramble / throwaway under pressure
-        if pressured:
-            self._adv["pressured"] = True
-            escape = e(qb, "pocket_presence") * 0.5 + e(qb, "agility") * 0.25 \
-                + e(qb, "speed") * 0.25
-            p_sack = _clip(0.275 - (escape - 62) / 210.0, 0.07, 0.46) * self.sack_mult * self.rx["sack"]
-            if random.random() < p_sack:
-                return self._sack(qb, rushers)
-            mob = (e(qb, "speed") - 60) / 75.0
-            hit_rusher = win_m["rusher"]
-            self.st(hit_rusher, "pressures")
-            if random.random() < _clip(mob * 0.65, 0.03, 0.50) and not hail:
-                self._adv["scramble"] = True
-                if self.cur_diag is not None:
-                    self.cur_diag.update(run="scramble", carrier="QB", dir=random.choice([-1, 1]))
-                return self._qb_run(qb, scramble=True)
-            if random.random() < 0.38:
-                self.st(hit_rusher, "qb_hits")
-                self._charge_block(win_m, "hits_allowed")
-            if random.random() < 0.20 and not hail:
-                self.st(qb, "pass_att")
-                self.ts(off, "pass_att")
-                return {"kind": "pass", "yards": 0, "clock_runs": False, "time": 5,
-                        "text": f"{_short(qb.name)} under pressure, throws it away"}
-
         # Targets & coverage: the receivers running routes in this concept
         cands = self._receivers(wrs, tes, rb, fbp, ptype)
         routed = []
@@ -1956,21 +1901,102 @@ class GameSim:
                 self.st(d, "cov_snaps")
                 if o < -4.0:
                     self.st(d, "cov_wins")
-        # The quarterback's read: better processors find the open man more often
-        read = e(qb, "progression_reads") * 0.6 + e(qb, "decision_making") * 0.4
-        temp = _clip(15.0 - (read - 60) / 5.0, 7.0, 17.0) * (1.25 if pressured else 1.0)
-        weights = [max(0.01, pr * math.exp(_clip(o, -40, 40) / temp)) for (_, _, pr, o, _) in scored]
-        tgt = random.choices(scored, weights=weights, k=1)[0]
+        # Pre-snap: a sharp quarterback spots the pressure and sets a hot route
+        hot = False
+        if blitz:
+            spot = _clip((e(qb, "decision_making") - 55) / 60.0 + (e(qb, "awareness") - 60) / 200.0, 0.05, 0.65)
+            if random.random() < spot:
+                hot = True
+                self.st(qb, "audibles")
+                scored = [(r, role, pr, o + (3.0 if pb.ROUTES.get(route_of.get(r.id, ""), {}).get("cls")
+                                             in ("short", "screen") else 0.0), d)
+                          for (r, role, pr, o, d) in scored]
+
+        # The quarterback's progression: first read, second, third... then the checkdown
+        prog = self._progression(qb, scored, ptype, hot)
+        time_req_extra = prog["time"]
+        # Protection: every rusher against his blocker(s)
+        edge_add = dfn_lib.FRONTS[dc["front"]]["rush"] \
+            + (staff_mod.def_calling(de.team) - staff_mod.off_calling(off.team)) * 0.35
+        if dc["sim"]:
+            edge_add += 2.0 - (e(qb, "progression_reads") - 70) * 0.10
+        if dc["rush"] == 3:
+            edge_add -= 6.0
+        stunt = 0.0
+        if dc["stunt"]:
+            # Line games: a sharp, experienced line passes them off; a green one gives up a free rusher
+            ol_aw = sum(e(p, "awareness") for p in off.ol) / max(1, len(off.ol))
+            stunt = 1.5 - (ol_aw - 70) * 0.18 + random.gauss(0, 3.0)
+        time_req = {"screen": -1.3, "short": -0.40, "medium": 0.18, "deep": 0.48,
+                    "hail": 0.6}[ptype]
+        if pa:
+            time_req += 0.30 if not call.get("trick") else 0.55
+        if call.get("rpo"):
+            time_req -= 0.6
+        # The quarterback's clock: quick processors get the ball out before the rush arrives;
+        # every extra read (and holding the ball) gives the rush more time
+        time_req += (70 - e(qb, "decision_making")) / 250.0 + time_req_extra
+        if hot:
+            time_req -= 0.30
+        rlist = [(p, kinds.get(p.id, "blitz")) for p, _ in rushers]
+        prot = trenches.assign_protection(off.ol, keep_in, rlist)
+        probs = trenches.contest_pass(e, prot, PASS_RUSH_BASE, time_req, stunt=stunt)
+        probs = [(_sig(math.log(max(1e-6, p) / max(1e-6, 1 - p)) + edge_add / 15.0), mg + edge_add)
+                 for p, mg in probs]
+        win_m, all_wins = trenches.resolve_pass_rush(e, prot, probs)
+        pressured = win_m is not None
+        self._prot_record(prot, all_wins, win_m)
+        self._rush_winner = win_m
+
+        # Sack / scramble / throwaway under pressure
+        if pressured:
+            self._adv["pressured"] = True
+            escape = e(qb, "pocket_presence") * 0.5 + e(qb, "agility") * 0.25 \
+                + e(qb, "speed") * 0.25
+            p_sack = _clip(0.275 - (escape - 62) / 210.0, 0.07, 0.46) * self.sack_mult * self.rx["sack"]
+            if random.random() < p_sack:
+                return self._sack(qb, rushers)
+            mob = (e(qb, "speed") - 60) / 75.0
+            hit_rusher = win_m["rusher"]
+            self.st(hit_rusher, "pressures")
+            if random.random() < _clip(mob * 0.65, 0.03, 0.50) and not hail:
+                self._adv["scramble"] = True
+                if self.cur_diag is not None:
+                    self.cur_diag.update(run="scramble", carrier="QB", dir=random.choice([-1, 1]))
+                return self._qb_run(qb, scramble=True)
+            if random.random() < 0.38:
+                self.st(hit_rusher, "qb_hits")
+                self._charge_block(win_m, "hits_allowed")
+            if random.random() < 0.20 and not hail:
+                self.st(qb, "pass_att")
+                self.st(qb, "throwaways")
+                self.ts(off, "pass_att")
+                return {"kind": "pass", "yards": 0, "clock_runs": False, "time": 5,
+                        "text": f"{_short(qb.name)} under pressure, throws it away"}
+
+        tgt = prog["target"]
+        if prog["kind"] == "throwaway" and not hail:
+            self.st(qb, "pass_att")
+            self.st(qb, "throwaways")
+            self.ts(off, "pass_att")
+            return {"kind": "pass", "yards": 0, "clock_runs": False, "time": 6,
+                    "text": f"{_short(qb.name)} finds nobody open and throws it away"}
+        if pressured and prog["reads"] >= 2:
+            # the rush arrives mid-progression: dump it to the outlet if there is one
+            outlet = [s_ for s_ in scored if s_[1] in ("RB", "TE1", "FB") and s_[0] is not tgt[0]]
+            if outlet and random.random() < 0.45:
+                tgt = max(outlet, key=lambda s_: s_[3] + random.gauss(0, 6))
+                prog["kind"] = "checkdown"
         rec, role, _, openness, dfnd = tgt
-        if ptype in ("medium", "deep") and (
-                (pressured and random.random() < 0.35) or
-                (openness < -6 and random.random() < 0.30)):
-            # Checkdown: under duress, or the read downfield is blanketed
-            short_opts = [s for s in scored if s[1] in ("RB", "TE1", "FB") and s[0] is not rec]
-            if short_opts:
-                rec, role, _, openness, dfnd = max(short_opts, key=lambda s: s[3] + random.gauss(0, 6))
-                openness = max(openness, 2.0)
-                ptype = "short"
+        if prog["kind"] == "checkdown" and ptype in ("medium", "deep"):
+            openness = max(openness, 2.0)
+            ptype = "short"
+        if prog["kind"] == "checkdown":
+            self.st(qb, "checkdowns")
+        if openness < -2.0:
+            self.st(qb, "tight_windows")            # threw into coverage
+        self.st(qb, "ttt", prog["ttt"])
+        self.st(qb, "ttt_n")
 
         # Air yards
         if ptype == "screen":
@@ -2021,7 +2047,7 @@ class GameSim:
                 # Winning at the catch point: height of the jump vs the defender's
                 catch += (e(rec, "jumping") - e(dfnd, "jumping")) * 0.06
         catch += self.wx["catch"]
-        p_comp = base + 0.064 + (acc - 77) / 100.0 * 0.30 + openness / 100.0 * 0.46 \
+        p_comp = base + 0.078 + (acc - 77) / 100.0 * 0.30 + openness / 100.0 * 0.46 \
             + (catch - 75) / 100.0 * 0.13
         if dfnd is not None and openness < 4:
             p_comp -= (e(dfnd, "pass_breakup") - 60) / 100.0 * 0.05
@@ -2074,6 +2100,51 @@ class GameSim:
                "air": air, "ptype": ptype, "incomplete": True, "def": dfnd}
         return out
 
+    def _qb_aggression(self, qb):
+        """0 = careful game manager .. 1 = gunslinger (derived from personality and arm)."""
+        h = qb.hidden
+        return _clip(0.35 + (h.get("ambition", 50) - 50) / 160.0 + (50 - h.get("temperament", 50)) / 220.0
+                     + (qb.a("throw_power") - 80) / 120.0 + (60 - qb.a("decision_making")) / 260.0, 0.0, 1.0)
+
+    def _progression(self, qb, scored, ptype, hot=False):
+        """
+        Work the reads in order. The concept decides the order (primary first); the
+        quarterback sees how open each man is (better processors see it more
+        clearly), throws when he likes what he sees, and otherwise moves on — to
+        the checkdown, or he holds it, or he throws it away. Gunslingers throw
+        into tighter windows; careful quarterbacks take the checkdown.
+        """
+        e = self.e
+        reads = e(qb, "progression_reads")
+        dm = e(qb, "decision_making")
+        aggr = self._qb_aggression(qb)
+        noise = _clip(8.0 - (dm - 60) / 6.0, 2.5, 11.0)
+        max_reads = 2 + (reads >= 68) + (reads >= 82)
+        order = sorted(scored, key=lambda s_: -(s_[2] * random.lognormvariate(0, 0.35)))
+        if hot:
+            order.sort(key=lambda s_: 0 if s_[1] in ("RB", "TE1", "FB") or s_[3] > 3 else 1)
+        outlets = [s_ for s_ in scored if s_[1] in ("RB", "FB")] or \
+            [s_ for s_ in scored if s_[1] == "TE1"]
+        base_t = {"screen": 1.7, "short": 2.3, "medium": 2.75, "deep": 3.1, "hail": 3.4}[ptype]
+        for k, cand in enumerate(order[:max_reads]):
+            seen = cand[3] + random.gauss(0, noise)
+            thr = 2.0 - 7.0 * aggr - 2.5 * k
+            if seen >= thr:
+                return {"target": cand, "reads": k + 1, "kind": "read", "time": 0.10 * k,
+                        "ttt": base_t + 0.45 * k}
+        k = min(max_reads, len(order))
+        # Nobody he liked: checkdown, hold it and hope, force it, or throw it away
+        if outlets and random.random() < 0.55 + 0.35 * (1 - aggr):
+            out = max(outlets, key=lambda s_: s_[3] + random.gauss(0, noise))
+            return {"target": out, "reads": k + 1, "kind": "checkdown", "time": 0.10 * k,
+                    "ttt": base_t + 0.45 * k}
+        best = max(order, key=lambda s_: s_[3] + random.gauss(0, noise))
+        if random.random() < 0.15 + (dm - 50) / 90.0 * (1 - aggr) and ptype != "hail":
+            return {"target": best, "reads": k + 1, "kind": "throwaway", "time": 0.16 * k + 0.25,
+                    "ttt": base_t + 0.45 * k + 0.5}
+        return {"target": best, "reads": k + 1, "kind": "force", "time": 0.16 * k + 0.35,
+                "ttt": base_t + 0.45 * k + 0.7}
+
     def _receivers(self, wrs, tes, rb, fbp, ptype):
         out = []
         roles = ["WR1", "WR2", "WR3", "WR4"]
@@ -2093,7 +2164,7 @@ class GameSim:
                 pr *= 0.6
             out.append((w, roles[i], pr))
         for i, t in enumerate(tes):
-            pr = (1.0 if i == 0 else 0.40) * (0.55 + 0.45 * t.rating_at("TE") / 130.0) * busy(t)
+            pr = (0.94 if i == 0 else 0.40) * (0.55 + 0.45 * t.rating_at("TE") / 130.0) * busy(t)
             if ptype == "deep":
                 pr *= 0.55
             out.append((t, "TE1" if i == 0 else "TE2", pr))

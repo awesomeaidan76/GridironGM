@@ -110,8 +110,9 @@ def assign_protection(ol, extra, rushers, rng=random):
         if not targets:
             break
         if b.position in ("OT", "IOL"):
-            inner = [x for x in targets if x["rusher"] in inside] or targets
-            x = inner[0] if len(inner) == 1 else max(inner, key=lambda t: t["rusher"].ca)
+            # the slide goes toward the most dangerous rusher (an elite edge gets help too)
+            undoubled = [x for x in targets if len(x["blockers"]) == 1] or targets
+            x = max(undoubled, key=lambda t: t["rusher"].ca + (8 if t["rusher"] in inside else 0))
             x["blockers"].append(b)
         else:
             edge_m = [x for x in targets if x["rusher"] in edges] or targets

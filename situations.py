@@ -84,6 +84,8 @@ def choose_fourth(st, aggression, game_mgmt, rng=random):
     aggression 0-1 (coach tendency x league setting), game_mgmt 1-20.
     Returns "go", "punt" or "fg".
     """
+    if st.get("fg_range_ok") and st["fg_prob"] < 0.45 and st["secs"] > 150:
+        st = dict(st, fg_range_ok=False)       # coaches don't trust long-shot kicks until the end
     v = fourth_down_values(st)
     # Coaches don't trust the math equally: conservative ones demand a margin
     bias = (aggression - 0.5) * 0.04 - FOURTH_CAUTION

@@ -266,7 +266,7 @@ class Team:
         roster_lean = max(-0.07, min(0.07, (pass_score - run_score) / 150.0)) * adapt
 
         plan = {
-            "pass_rate": 0.545 + 0.21 * t["pass_lean"] + roster_lean,
+            "pass_rate": 0.52 + 0.21 * t["pass_lean"] + roster_lean,
             "deep": t["deep"],
             "outside": t["outside"],
             "qb_run": t["qb_run"],
