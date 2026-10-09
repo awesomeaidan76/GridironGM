@@ -112,8 +112,23 @@ class HomeScreen(Screen):
         self.lay.addWidget(banner)
 
         items = inbox.action_items(lg)
-        if items:
-            self.lay.addWidget(inbox_card(self.main, items, limit=4))
+        pressing = [it for it in items if it["priority"] <= 2]
+        if pressing:
+            self.lay.addWidget(inbox_card(self.main, items, limit=min(4, len(pressing))))
+        elif items:
+            note = Card()
+            row = QHBoxLayout()
+            lbl = QLabel(f"Nothing needs a decision now. {len(items)} thing{'s' if len(items) > 1 else ''} "
+                         f"worth a look in your inbox, starting with: {items[0]['title']}.")
+            lbl.setObjectName("muted")
+            lbl.setWordWrap(True)
+            row.addWidget(lbl, 1)
+            go = QPushButton("Open Inbox")
+            go.setObjectName("ghost")
+            go.clicked.connect(lambda: self.main.goto("inbox"))
+            row.addWidget(go)
+            note.body.addLayout(row)
+            self.lay.addWidget(note)
 
         # Tiles
         tiles = QHBoxLayout()
@@ -161,6 +176,8 @@ class HomeScreen(Screen):
         grid.setColumnStretch(1, 2)
         self.lay.addLayout(grid)
         self.lay.addStretch(1)
+        # Scroll rather than squash the cards when the window is short
+        self.inner.setMinimumHeight(self.inner.sizeHint().height())
 
     def _guidance(self):
         lg, team = self.lg, self.user
@@ -439,14 +456,14 @@ def inbox_row(main, item):
     return row
 
 
-def inbox_card(main, items, limit=None):
+def inbox_card(main, items, limit=None, title="Needs a Decision"):
     shown = items if limit is None else items[:limit]
     right = None
     if limit is not None and len(items) > limit:
         right = QPushButton(f"All {len(items)} ▸")
         right.setObjectName("ghost")
         right.clicked.connect(lambda: main.goto("inbox"))
-    card = Card("Needs a Decision", right=right)
+    card = Card(title, right=right)
     for i, it in enumerate(shown):
         if i:
             card.add(divider())
@@ -481,7 +498,7 @@ class InboxScreen(Screen):
             lbl.setObjectName("muted")
             self.lay.addWidget(lbl)
         else:
-            self.lay.addWidget(inbox_card(self.main, items))
+            self.lay.addWidget(inbox_card(self.main, items, title="To Do"))
         self.lay.addStretch(1)
 
 
