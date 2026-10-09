@@ -172,6 +172,29 @@ def exercise_cap_planner(win, tag):
     step(f"cap planner {tag}")
 
 
+INBOX_KINDS = set()
+
+
+def exercise_inbox(win, tag):
+    """Open the inbox and press every kind of button once."""
+    import inbox
+    from ui_screens_club import run_inbox_action
+    win.goto("inbox")
+    done = set()
+    for _ in range(30):
+        todo = [(it, a) for it in inbox.action_items(win.lg) for a, _ in it["actions"]
+                if (it["kind"], a) not in done]
+        if not todo:
+            break
+        it, a = todo[0]
+        done.add((it["kind"], a))
+        INBOX_KINDS.add(it["kind"])
+        run_inbox_action(win, it, a)
+        win.goto("inbox")
+    win.goto("home")
+    step(f"inbox {tag}: {sorted(k for k, _ in done)}")
+
+
 def main():
     random.seed(3)
     # Start + new game dialogs
@@ -432,6 +455,14 @@ def main():
     tr.offers.setCurrentRow(0)
     tr._decline_offer()
     step("trade offers")
+    for _ in range(40):
+        if market.maybe_offer_user(lg, chance=1.0):
+            break
+    offered = {r for o in lg.trade_offers for r in o["get"]}
+    hurt = next(p for p in team.roster if not p.ps and not p.ir and p.position == "CB"
+                and p.id not in offered)
+    hurt.injury = {"name": "Test fracture", "weeks": 8}
+    exercise_inbox(win, "in season")
     win.goto("glossary")
     gl = win.screens["glossary"]
     gl.search.setText("cover")
@@ -474,6 +505,7 @@ def main():
     # Offseason: re-sign window
     win.continue_clicked()
     assert lg.phase == "resign", lg.phase
+    exercise_inbox(win, "resign")
     win.goto("finances")
     fin._set_filter("expiring")
     if fin.table.rowCount():
@@ -487,6 +519,7 @@ def main():
     exercise_cap_planner(win, "resign")
     win.continue_clicked()
     assert lg.phase == "draft", lg.phase
+    exercise_inbox(win, "draft")
     win.goto("draft")
     dr = win.screens["draft"]
     dr._sim()
@@ -507,6 +540,7 @@ def main():
     win.continue_clicked()
     assert lg.phase == "preseason", lg.phase
     visit_all("preseason2")
+    exercise_inbox(win, "preseason")
     win.continue_clicked()
     assert lg.phase == "regular" and lg.week == 0, (lg.phase, lg.week)
     step("new season")
@@ -538,6 +572,7 @@ def main():
     save_manager.delete(path)
     step("save/load")
     assert any(DIAG_SEEN), "no play diagrams were drawn"
+    assert {"offer", "ir", "expiring", "draft"} <= INBOX_KINDS, INBOX_KINDS
     print("negotiations:", [(n, r) for n, r, _ in NEGOTIATIONS][:8])
     assert any(r for _, r, _ in NEGOTIATIONS), NEGOTIATIONS
     print(f"UI test passed: {len(STEPS)} steps, league now {lg.year} {lg.week_label}, "
