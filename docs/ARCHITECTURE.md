@@ -222,7 +222,10 @@ Every CPU club has three decision makers, all plain data plus small functions:
   - blockbusters for stars by all-in clubs;
   - salary dumps by clubs resetting their cap;
   - gamblers trade up, analytics GMs trade down;
-  - both sides must agree.
+  - both sides must agree;
+  - the user's trading block (`block_offers`): each club's budget is the most it would give and
+    still pass `trades.evaluate`, and it fills that with the best players or picks for the user;
+  - `make_it_work` searches the user's picks and players for the cheapest addition that passes `evaluate`.
 - `draft.board_value`: risk weights ceiling over polish, the BPA trait weights need, and QB search adds weight to quarterbacks.
 - Draft-day trade-downs and trade-ups.
 - `free_agency.ai_free_agency_wave`:

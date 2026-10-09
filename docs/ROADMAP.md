@@ -26,8 +26,10 @@ Franchise, NBA 2K MyLeague/MyGM, Draft Day Sports, Pro Strategy Football and Mot
   redesign). Logic lives in `inbox.py`.
 - 🔜 **Persistent table state.** Keep sort, filters and scroll position per screen, plus back and
   forward navigation (the top complaints about FM26).
-- 🔜 **Trading block.** List players and ask every club for offers, with a "what would make this
-  work?" button and filters by asset type (ZenGM).
+- ✅ **Trading block.** Put players and picks on the block (Transactions → Trading Block), ask every
+  club for offers made of anything, players only or picks only, then accept one or open it in Trades
+  to haggle. The Trades screen has a "What would make this work?" button that finds the smallest
+  addition from your side the other GM would accept (ZenGM). Logic in `market.py`.
 - ✅ **Multi-year cap planner.** My Club → Cap Planner: projected cap, committed money, dead money,
   cap space and deals ending for the next five seasons, every contract year by year with what a cut
   would save, and "what if I extend him?" previews priced from his agent's ask (OOTP, FOF8).
