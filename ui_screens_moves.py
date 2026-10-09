@@ -642,13 +642,16 @@ class TradingBlockScreen(Screen):
 
         body = QHBoxLayout()
         body.setSpacing(12)
+        # Roster and block stacked on the left so names and offers both get room to read
+        col = QVBoxLayout()
+        col.setSpacing(12)
         left = Card("Your Players and Picks")
         self.mine = DataTable(["Name", "Pos", "Age", "OVR", "Salary", "Yrs"], stretch=0)
         left.add(self.mine)
-        add = QPushButton("Put on the Block  →")
+        add = QPushButton("Put on the Block")
         add.clicked.connect(self._add)
         left.add(add)
-        body.addWidget(left, 3)
+        col.addWidget(left, 7)
 
         mid = Card("On the Block")
         self.block = QListWidget()
@@ -656,8 +659,8 @@ class TradingBlockScreen(Screen):
         rm = QPushButton("Take off the Block")
         rm.clicked.connect(self._remove)
         mid.add(rm)
-        mid.setMinimumWidth(260)
-        body.addWidget(mid, 2)
+        col.addWidget(mid, 3)
+        body.addLayout(col, 5)
 
         right = Card("Offers")
         self.offers_table = DataTable(["Club", "Plan", "They offer", "Value"], stretch=2)
@@ -678,7 +681,7 @@ class TradingBlockScreen(Screen):
         acc.clicked.connect(self._accept)
         row.addWidget(acc)
         right.body.addLayout(row)
-        body.addWidget(right, 4)
+        body.addWidget(right, 6)
         self.outer.addLayout(body, 1)
         self.offers = []
 
@@ -742,8 +745,9 @@ class TradingBlockScreen(Screen):
             give, _ = market.offer_assets(lg, o)
             if any(a is None for a in give):
                 continue
+            labels = [trades.asset_label(lg, a) for a in give]
             rows.append([lg.teams[o["from"]].full_name, o.get("fit", ""),
-                         ", ".join(trades.asset_label(lg, a) for a in give),
+                         cell(", ".join(labels), tip="\n".join(labels)),
                          cell(f"{o['value']:.0f}", o["value"])])
             keys.append(i)
         self.offers_table.set_rows(rows, keys)
