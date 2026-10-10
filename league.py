@@ -169,7 +169,7 @@ class League:
         self.fa_wave = 0
         self.awards_this_season = {}
         # Competition committee
-        self.rules = {"coverage": 0, "qb_protection": 0, "holding": 0, "kickoff": 0}
+        self.rules = {"coverage": 0, "qb_protection": 0, "holding": 0, "kickoff": 0, "dynamic_kickoff": 0}
         self.rule_history = []     # [(year, key, step, text)]
         self.qb_injury_history = []
         # Roster rules

@@ -300,8 +300,23 @@ PLAYBOOK_DESC = [
      "fronts clog inside runs but are softer on the edge; a Wide 9 rushes the passer but opens inside lanes; "
      "Penny puts five on the line with one linebacker behind them so a three-safety defense can stop the run."),
     ("Special teams", "Kickoffs (deep, directional, squib, pooch, onside), returns (middle, sideline wall, wedge, "
-     "reverse), punts (spread, directional, rugby, pooch) and the receiving side's calls (return, wall, "
-     "block, safe/fake-watch). Better core special-teams players and coaches win the hidden yardage."),
+     "reverse, return to the field side, throwback lateral), punts (spread, directional, rugby, pooch, coffin "
+     "corner, and the rare third-down quick kick) and the receiving side's calls (return, wall, hold-up "
+     "return that doubles both gunners, block, safe/fake-watch). Better core special-teams players and "
+     "coaches win the hidden yardage."),
+    ("Fakes", "Fake punts: a direct snap to the up-back, a punter pass or a punter run. Fake field goals: "
+     "the holder runs or throws. Two-point tries can start from a swinging gate (the line splits out wide). "
+     "A fake works when the other team isn't expecting it: a safe call or a well-coached unit usually "
+     "stops it. Feature or remove each one in Tactics → Playbook."),
+    ("Dynamic kickoff", "A kickoff rule the competition committee may adopt when most kickoffs end in "
+     "touchbacks. Both units line up five yards apart and nobody moves until the ball lands, so returns are "
+     "more like a running play than a footrace. The kick must land between the goal line and the 20: short "
+     "of it the receivers get the ball at their 40, into the end zone in the air is a touchback (to the 30, "
+     "or the 35 if the committee later moves it to get more kicks returned). Onside kicks must be declared, "
+     "so there are no surprise onsides."),
+    ("Free kicks", "After a safety the team that gave it up punts from its own 20, and it can be returned. "
+     "After a fair catch, the receiving team may try a fair catch kick: a field goal kicked from the spot "
+     "with no rush, used at the end of a half."),
 ]
 
 LINE_DESC = [

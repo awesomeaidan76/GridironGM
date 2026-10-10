@@ -937,30 +937,40 @@ class GameSim:
         de, off = self.dfn, self.poss
         prefs = getattr(de.team, "play_prefs", None)
         if kind == "punt":
-            sit = {"togo": self.togo, "to_goal": 100 - self.yl, "fake_threat": off.plan.get("trick", 0.4)}
+            sit = {"togo": self.togo, "to_goal": 100 - self.yl, "fake_threat": off.plan.get("trick", 0.4),
+                   "returner": de.pr.return_rating if de.pr is not None else 75}
             return st_lib.choose_punt_return(sit, prefs)
         diff = de.score - off.score
         sit = {"togo": self.togo, "must_stop": self.quarter >= 4 and self.clock < 120 and -3 <= diff <= 2}
         return st_lib.choose_fg_defense(sit, prefs)
 
-    def kickoff(self, kicking, onside=False, from_yl=35):
+    def kickoff(self, kicking, onside=False, from_yl=35, free=False):
+        """A kickoff, or (free=True) the free kick after a safety from the kicking team's 20."""
         recv = self.other(kicking)
         self.poss, self.dfn = kicking, recv
         k = self._kicker(kicking)
         needed = onside or (self.quarter == 4 and recv.score > kicking.score and
                             sit_lib.should_onside(recv.score - kicking.score, self.clock, kicking.timeouts))
         ret = recv.kr
-        kind = st_lib.choose_kickoff({"onside_needed": needed,
-                                      "late_half": self.quarter in (2, 4) and self.clock <= 25,
-                                      "aggression": kicking.team.coach.tendencies.get("aggression", 0.45),
-                                      "lead": kicking.score - recv.score,
-                                      "returner": ret.return_rating if ret is not None else 75},
-                                     getattr(kicking.team, "play_prefs", None))
-        self.st(k, "ko")
+        dyn = self.rx.get("dynamic_kickoff", False) and not free
+        tb_spot = self.rx["touchback"]
+        if free and not needed:
+            kind = "Safety Punt"
+            k = self._punter(kicking)
+        else:
+            kind = st_lib.choose_kickoff({"onside_needed": needed,
+                                          "late_half": self.quarter in (2, 4) and self.clock <= 25,
+                                          "aggression": kicking.team.coach.tendencies.get("aggression", 0.45),
+                                          "lead": kicking.score - recv.score,
+                                          "returner": ret.return_rating if ret is not None else 75,
+                                          "dynamic": dyn, "tb_spot": tb_spot},
+                                         getattr(kicking.team, "play_prefs", None))
+            self.st(k, "ko")
+            self.ts(kicking, "kickoffs")
         if kind in ("Onside Kick", "Surprise Onside"):
             hands = sum(self.e(p, "catching") * 0.5 + self.e(p, "awareness") * 0.5
                         for p in (recv.lu["WR"][:3] + recv.lu["TE"][:1] + recv.lu["RB"][:1])) / 5.0
-            rec_chance = 0.10 if kind == "Onside Kick" else 0.48
+            rec_chance = (0.08 if dyn else 0.10) if kind == "Onside Kick" else 0.48
             rec_chance += (self.e(k, "kick_accuracy") - 75) / 600.0 - (hands - 70) / 700.0
             what = "onside kick" if kind == "Onside Kick" else "SURPRISE onside kick"
             if random.random() < _clip(rec_chance, 0.03, 0.65):
@@ -972,48 +982,105 @@ class GameSim:
             self._start_drive(recv, 100 - (from_yl + 10))
             return
         power = self.e(k, "kick_power") + self.wx["kick_power"]
-        dist = random.gauss(57 + (power - 70) * 0.35, 4.5)
-        tb_p = _clip((power - 66) / 45.0, 0.0, 0.85)
-        if kind == "Directional Kickoff":
-            dist -= 1.5
-            tb_p *= 0.65
-            if random.random() < 0.015 + max(0, 75 - self.e(k, "kick_accuracy")) / 600.0:
-                self.log(f"{_short(k.name)} directional kick goes OUT OF BOUNDS.", "note")
-                self.ts(kicking, "ko_oob")
-                self._start_drive(recv, 40)
+        acc = self.e(k, "kick_accuracy")
+        fair_ok = False
+        if kind == "Safety Punt":
+            dist = random.gauss(45 + (self.e(k, "punt_power") - 70) * 0.15, 5)
+            tb_p, fair_ok = 0.0, True
+        elif dyn:
+            # Dynamic kickoff: the kick has to land between the goal line and the 20
+            if kind == "Deep Kickoff":
+                short = random.random() < _clip((75 - power) / 60.0, 0.02, 0.35)
+                land_at = random.uniform(0, 6) if short else -5      # receiving yard line where it lands
+            elif kind == "Squib Kick":
+                land_at = random.gauss(15, 4)
+            else:
+                land_at = random.gauss(7 - (acc - 70) * 0.03, _clip(5.5 - (acc - 60) / 20.0, 2.5, 7.0))
+            if land_at < 0:
+                self.st(k, "ko_tb")
+                self.log(f"{_short(k.name)} kicks it into the end zone. Touchback to the {tb_spot}.", "note")
+                self._start_drive(recv, tb_spot)
+                self._ko_drive(recv, tb_spot)
                 return
-        elif kind == "Squib Kick":
-            dist, tb_p = random.gauss(41, 5), 0.0
-        elif kind == "Pooch Kick":
-            dist, tb_p = random.gauss(52, 3.5), 0.0
+            if land_at > 20:
+                self.ts(kicking, "ko_short")
+                self.log(f"{_short(k.name)} kick lands short of the landing zone: ball at the {recv.abbr} 40.",
+                         "note")
+                self._start_drive(recv, 40)
+                self._ko_drive(recv, 40)
+                return
+            if land_at < 3 and random.random() < 0.25:
+                # it bounced into the end zone and the returner downed it
+                self.log(f"{_short(k.name)} kicks off, downed in the end zone. Ball at the 20.", "note")
+                self._start_drive(recv, 20)
+                self._ko_drive(recv, 20)
+                return
+            dist = 100 - from_yl - land_at
+            tb_p = 0.0
+        else:
+            dist = random.gauss(57 + (power - 70) * 0.35, 4.5)
+            # a big leg puts it through the end zone; with the touchback out at the 30 kickers
+            # hang it short of the goal line to force a return instead
+            tb_p = _clip((power - 50) / 35.0, 0.05, 0.90) * (0.55 if tb_spot >= 30 else 1.0)
+            if kind == "Directional Kickoff":
+                dist -= 1.5
+                tb_p *= 0.65
+                if random.random() < 0.015 + max(0, 75 - acc) / 600.0:
+                    self.log(f"{_short(k.name)} directional kick goes OUT OF BOUNDS.", "note")
+                    self.ts(kicking, "ko_oob")
+                    self._start_drive(recv, 40)
+                    self._ko_drive(recv, 40)
+                    return
+            elif kind == "Squib Kick":
+                dist, tb_p = random.gauss(41, 5), 0.0
+            elif kind == "Pooch Kick":
+                dist, tb_p = random.gauss(52, 3.5), 0.0
         land = from_yl + dist          # yards from kicking team's goal
-        if land >= 100 + random.uniform(0, 3) or random.random() < tb_p:
+        if not dyn and (land >= 100 + random.uniform(0, 3) or random.random() < tb_p):
             self.st(k, "ko_tb")
             self.log(f"{_short(k.name)} kicks off. Touchback.", "note")
-            self._start_drive(recv, self.rx["touchback"])
+            self._start_drive(recv, tb_spot)
+            self._ko_drive(recv, tb_spot)
             return
         catch_at = max(-4, int(100 - land))          # receiving team yard line
-        if kind == "Pooch Kick" and random.random() < 0.55:
-            self.log(f"{_short(k.name)} pooch kick, fair catch by {_short(ret.name)}.", "note")
-            self._start_drive(recv, self.rx["touchback"])
+        if (kind == "Pooch Kick" and random.random() < 0.55) or (fair_ok and random.random() < 0.30):
+            spot = tb_spot if kind == "Pooch Kick" else max(1, catch_at)
+            self.log(f"{_short(k.name)} {'pooch kick' if kind == 'Pooch Kick' else 'free kick'}, fair catch by "
+                     f"{_short(ret.name)}.", "note")
+            self._start_drive(recv, spot)
+            self._ko_drive(recv, spot)
+            if fair_ok:
+                self._fair_catch_kick(recv, spot)
             return
         scheme = st_lib.choose_kick_return(getattr(recv.team, "play_prefs", None))
         mean_adj, sd, big = {"Middle Return": (0.0, 6.0, 1.0), "Sideline Wall": (-0.5, 6.5, 1.3),
-                             "Wedge Return": (1.0, 5.0, 0.7), "Kickoff Reverse": (-2.5, 9.0, 2.4)}[scheme]
+                             "Wedge Return": (1.0, 5.0, 0.7), "Kickoff Reverse": (-2.5, 9.0, 2.4),
+                             "Return to the Field": (-0.5, 6.0, 1.1), "Throwback": (-3.0, 10.0, 2.6)}[scheme]
         if kind == "Directional Kickoff":
             mean_adj -= 2.5
+            if scheme == "Return to the Field":
+                mean_adj += 3.0                 # the blockers were already set up away from the boundary
         elif kind == "Squib Kick":
-            mean_adj -= 10.0
+            mean_adj -= 10.0 if not dyn else 6.0
             big *= 0.4
         elif kind == "Pooch Kick":
             mean_adj -= 6.0
+        elif kind == "Safety Punt":
+            mean_adj -= 10.5                   # a punt's hang time lets the coverage get down the field
         edge = self._st_edge(recv, kicking)
         rr = ret.return_rating + self.form.get(ret.id, 0)
-        gain = max(0, int(random.gauss(21 + (rr - 75) * 0.25 + mean_adj + edge * 1.2, sd)))
-        if random.random() < (0.0048 + max(0, rr - 78) * 0.0005) * self.big_play * big * (1 + 0.15 * edge):
+        if dyn:
+            # nobody moves until the ball lands: more like a scrimmage play than a footrace
+            gain = max(0, int(random.gauss(23.5 + (rr - 75) * 0.28 + mean_adj + edge * 1.4, sd + 0.5)))
+        else:
+            gain = max(0, int(random.gauss(21 + (rr - 75) * 0.25 + mean_adj + edge * 1.2, sd)))
+        if random.random() < (0.0048 + max(0, rr - 78) * 0.0005) * self.big_play * big * (1 + 0.15 * edge) \
+                * (0.6 if dyn else 1.0):
             gain = 100 - catch_at
         yl = catch_at + gain
         self.st(ret, "kr")
+        if not free:
+            self.ts(kicking, "ko_returned")
         if yl >= 100:
             self.st(ret, "kr_yds", 100 - catch_at)
             self.st(ret, "kr_td")
@@ -1026,7 +1093,8 @@ class GameSim:
         self.st(ret, "kr_yds", yl - catch_at)
         self.st(ret, "kr_long", yl - catch_at)
         self._st_cover_tackle(kicking)
-        fum = 0.006 * (2.0 if scheme == "Kickoff Reverse" else 1.0) * (1.6 if kind == "Squib Kick" else 1.0)
+        fum = 0.006 * (2.0 if scheme == "Kickoff Reverse" else 2.5 if scheme == "Throwback" else 1.0) \
+            * (1.6 if kind == "Squib Kick" else 1.0)
         if random.random() < fum * self.to_rate:
             self.st(ret, "fumbles")
             self.st(ret, "fumbles_lost")
@@ -1034,12 +1102,49 @@ class GameSim:
             self._start_drive(kicking, 100 - yl)
             return
         how = {"Squib Kick": "squib kicks", "Directional Kickoff": "kicks toward the sideline",
-               "Pooch Kick": "pooch kicks"}.get(kind, "kicks off")
-        extra = {"Kickoff Reverse": " on a reverse", "Sideline Wall": " behind a sideline wall"}.get(scheme, "") \
+               "Pooch Kick": "pooch kicks", "Safety Punt": "free kicks after the safety",
+               "Landing Zone Kick": "kicks into the landing zone"}.get(kind, "kicks off")
+        extra = {"Kickoff Reverse": " on a reverse", "Sideline Wall": " behind a sideline wall",
+                 "Throwback": " on a throwback lateral", "Return to the Field": " to the wide side"}.get(scheme, "") \
             if gain >= 30 else ""
         self.log(f"{_short(k.name)} {how}. {_short(ret.name)} returns{extra} to the "
                  f"{recv.abbr} {yl}.", "note")
         self._start_drive(recv, yl)
+        self._ko_drive(recv, yl)
+
+    def _ko_drive(self, recv, yl):
+        """Starting field position after a kick (league averages tell the committee how kickoffs are going)."""
+        self.ts(recv, "ko_start", yl)
+        self.ts(recv, "ko_drives")
+
+    def _fair_catch_kick(self, side, yl):
+        """After a fair catch at the end of a half, the receiving team may take a free-kick field goal."""
+        if self.quarter not in (2, 4) or self.clock > 6 or self.game_over:
+            return False
+        diff = side.score - self.other(side).score
+        if self.quarter == 4 and not -3 <= diff <= 0:
+            return False
+        k = self._kicker(side)
+        dist = 100 - yl + 10                     # kicked from the spot: no snap, no hold
+        if dist > self.fg_range(k) + 4:
+            return False
+        self.st(k, "fga")
+        self.ts(side, "fga")
+        if random.random() < _clip(self.fg_probability(k, dist) + 0.04, 0.0, 0.97):
+            self.st(k, "fgm")
+            self.st(k, "fg_long", dist)
+            self.ts(side, "fgm")
+            self._end_drive("Field goal")
+            self.add_score(side, 3, f"{_short(k.name)} {dist}-yard FAIR CATCH KICK is GOOD")
+            self.run_clock(5, False)
+            self._ot_check()
+            if not self.game_over:
+                self.kickoff(side)
+        else:
+            self.log(f"{_short(k.name)} {dist}-yard fair catch kick is NO GOOD", "play")
+            self.run_clock(5, False)
+            self.turnover_on_spot("Missed FG", max(20, 100 - yl))
+        return True
 
     def punt(self):
         p = self._punter(self.poss)
@@ -1047,10 +1152,11 @@ class GameSim:
         rcall = self.st_def or self._st_def_call("punt")
         self.st_def = None
         to_goal = 100 - self.yl
-        kind = st_lib.choose_punt({"to_goal": to_goal, "wind": (self.weather or {}).get("wind", 0)},
+        kind = st_lib.choose_punt({"to_goal": to_goal, "wind": (self.weather or {}).get("wind", 0),
+                                   "accuracy": self.e(p, "punt_accuracy")},
                                   getattr(self.poss.team, "play_prefs", None))
         self.ts(self.poss, "punts")
-        block_p = {"Punt Block": 0.022, "Punt Safe": 0.002}.get(rcall, 0.004)
+        block_p = {"Punt Block": 0.022, "Punt Safe": 0.002, "Hold-Up Return": 0.0015}.get(rcall, 0.004)
         if kind == "Rugby Punt":
             block_p *= 0.5
         if random.random() < block_p * (1 + 0.2 * self._st_edge(self.dfn, self.poss)):
@@ -1085,6 +1191,9 @@ class GameSim:
         elif kind == "Pooch Punt":
             # aim for the 8-yard line; accuracy decides how close
             gross = int(round(to_goal - 8 + random.gauss(0, 9.5 - (acc - 60) / 10.0)))
+        elif kind == "Coffin Corner Punt":
+            # aim out of bounds at the 6: a sharper miss than a pooch, but no return when it works
+            gross = int(round(to_goal - 6 + random.gauss(0, _clip(11.0 - (acc - 60) / 8.0, 4.0, 12.0))))
         self.st(p, "punts")
         if gross >= to_goal:
             # Pinning attempt: accuracy decides between downed deep or touchback
@@ -1108,18 +1217,21 @@ class GameSim:
         self.st(p, "punt_yds", gross)
         self.st(p, "punt_long", gross)
         fair_p = 0.30 + (acc - 70) / 150 + (0.25 if land < 15 else 0)
-        fair_p += {"Punt Block": 0.15, "Punt Safe": 0.10}.get(rcall, 0.0)
+        fair_p += {"Punt Block": 0.15, "Punt Safe": 0.10, "Hold-Up Return": -0.12}.get(rcall, 0.0)
         if kind == "Pooch Punt":
             fair_p += 0.25
-        oob = kind == "Directional Punt" and random.random() < 0.22
+        oob = (kind == "Directional Punt" and random.random() < 0.22) or \
+            (kind == "Coffin Corner Punt" and random.random() < _clip(0.45 + (acc - 70) / 60.0, 0.25, 0.85))
         rugby_dead = kind == "Rugby Punt" and random.random() < 0.40
+        fair = False
         if oob or rugby_dead or random.random() < fair_p:
             yl = land
+            fair = not (oob or rugby_dead)
             text = "out of bounds" if oob else "rolls dead" if rugby_dead else f"fair catch by {_short(ret.name)}"
         else:
             rr = ret.return_rating + self.form.get(ret.id, 0)
             mean_adj, big = {"Return Wall": (0.8, 1.25), "Punt Block": (-3.0, 0.6),
-                             "Punt Safe": (-1.5, 0.8)}.get(rcall, (0.0, 1.0))
+                             "Punt Safe": (-1.5, 0.8), "Hold-Up Return": (1.6, 1.2)}.get(rcall, (0.0, 1.0))
             if kind == "Directional Punt":
                 mean_adj -= 2.5
             elif kind == "Rugby Punt":
@@ -1138,6 +1250,12 @@ class GameSim:
                 self.add_score(self.poss, 6, f"{_short(ret.name)} {100 - land}-yard punt return TOUCHDOWN")
                 self._after_td(self.poss)
                 return
+            if rcall == "Hold-Up Return" and gain > 0 and random.random() < 0.06:
+                # a block in the back: ten yards from the spot of the foul
+                gain = max(-5, gain // 2 - 10)
+                self.ts(self.dfn, "penalties")
+                self.ts(self.dfn, "pen_yds", 10)
+                self.log(f"PENALTY on {self.dfn.abbr}: illegal block in the back on the return, 10 yards", "play")
             self.st(ret, "pr_yds", gain)
             self._st_cover_tackle(self.poss)
             yl = max(1, land + gain)
@@ -1153,9 +1271,11 @@ class GameSim:
         if yl <= 20:
             self.st(p, "punts_in20")
         how = {"Rugby Punt": "rugby-style punt", "Directional Punt": "punts toward the sideline",
-               "Pooch Punt": "pooch punt"}.get(kind, "punts")
+               "Pooch Punt": "pooch punt", "Coffin Corner Punt": "punts for the coffin corner"}.get(kind, "punts")
         self.log(f"{_short(p.name)} {how} {gross} yards, {text}.", "play")
         self.turnover_on_spot("Punt", yl)
+        if fair:
+            self._fair_catch_kick(self.poss, yl)
 
     def fg_probability(self, k, dist):
         acc = self.e(k, "kick_accuracy")
@@ -1226,6 +1346,12 @@ class GameSim:
             def_q = (self.other(side).team.unit_ratings()["DEF"])
             prob = _clip(0.47 + (off_q - def_q) / 300.0, 0.30, 0.65)
             self.ts(side, "two_att")
+            prefs = getattr(side.team, "play_prefs", None) or {}
+            if random.random() < 0.05 * side.plan["trick"] * prefs.get("st:Swinging Gate", 1.0):
+                # Swinging gate: the line splits out wide; a well-coached defense follows it
+                read = random.random() < 0.35 + 0.4 * self.other(side).team.coach.r("game_management") / 20.0
+                prob += -0.08 if read else 0.14
+                self.log(f"{side.abbr} line up in a swinging gate for the two-point try", "note")
             if random.random() < prob:
                 self.ts(side, "two_conv")
                 self.add_score(side, 2, "Two-point conversion is GOOD")
@@ -1443,6 +1569,10 @@ class GameSim:
 
         # Pre-snap penalty
         if self._pre_snap_penalty():
+            return
+        if self.down == 3 and self.togo >= 10 and 8 <= self.yl <= 35 and self.quarter <= 3 \
+                and self.urgency(self.poss) == "normal" and random.random() < self._quick_kick_rate():
+            self._quick_kick()
             return
 
         hail = (self.clock <= 8 and self.quarter in (2, 4) and 45 <= self.yl < 70
@@ -3255,6 +3385,38 @@ class GameSim:
             return self.pass_play(call={"trick": "flea"})
         return self.run_play(call={"concept": "reverse"})
 
+    def _quick_kick_rate(self):
+        """Old-school game managers sometimes punt on third and long from deep in their own end."""
+        side = self.poss
+        prefs = getattr(side.team, "play_prefs", None) or {}
+        return 0.004 * (self._gm(side) / 20.0) * (1.0 - side.plan["aggression"]) * prefs.get("st:Quick Kick", 1.0)
+
+    def _quick_kick(self):
+        off = self.poss
+        p = self._punter(off)
+        to_goal = 100 - self.yl
+        self.ts(off, "punts")
+        self.ts(off, "quick_kicks")
+        self.st(p, "punts")
+        # nobody is back to field it, so it rolls
+        gross = int(random.gauss(36 + (self.e(p, "punt_power") - 70) * 0.10, 6)) + random.randint(4, 16)
+        self.run_clock(8, False)
+        if gross >= to_goal:
+            self.st(p, "punt_yds", to_goal)
+            self.st(p, "punt_tb")
+            self.log(f"QUICK KICK! {_short(p.name)} punts on third down from the shotgun. It rolls into the "
+                     f"end zone. Touchback.", "play")
+            self.turnover_on_spot("Punt", 20)
+            return
+        self.st(p, "punt_yds", gross)
+        self.st(p, "punt_long", gross)
+        spot = to_goal - gross
+        if spot <= 20:
+            self.st(p, "punts_in20")
+        self.log(f"QUICK KICK! {_short(p.name)} punts on third down from the shotgun, {gross} yards, "
+                 f"rolls dead at the {self.dfn.abbr} {spot}.", "play")
+        self.turnover_on_spot("Punt", spot)
+
     def _fake_ok(self):
         plan = self.poss.plan
         if self.togo > 5 or self.quarter >= 5:
@@ -3276,20 +3438,32 @@ class GameSim:
                          - 0.15 * self.dfn.team.coach.r("game_management") / 20.0, 0.15, 0.85)
         what = "FAKE PUNT" if kind == "punt" else "FAKE FIELD GOAL"
         to_goal = 100 - self.yl
-        if kind == "punt" or random.random() < 0.4:
-            runner = (off.lu["RB"][1:2] or off.lu["FB"][:1] or off.lu["RB"][:1] or [off.qb])[0]
-            yards = int(random.gauss(self.togo + 2.5, 4.0)) if random.random() < surprise \
+        holder = self._punter(off)                  # the punter holds for kicks too
+        name = st_lib.choose_fake(kind, {"arm": self.e(holder, "throw_power"), "togo": self.togo},
+                                  getattr(off.team, "play_prefs", None))
+        self._ocall = "Fake: " + name
+        if name in ("Up-Back Run", "Punter Run", "Holder Run"):
+            if name == "Up-Back Run":
+                runner = (off.lu["RB"][1:2] or off.lu["FB"][:1] or off.lu["RB"][:1] or [off.qb])[0]
+                hit = surprise
+            else:
+                runner = holder                     # a kicker's teammate, not a runner: speed matters
+                hit = surprise * _clip(0.55 + (self.e(holder, "speed") - 55) / 60.0, 0.4, 1.0)
+            yards = int(random.gauss(self.togo + 2.5, 4.0)) if random.random() < hit \
                 else random.choice([-2, -1, 0, 1, max(0, self.togo - 1)])
             yards = min(yards, to_goal)
+            label = {"Up-Back Run": "direct snap to the up-back", "Punter Run": "the punter runs",
+                     "Holder Run": "the holder runs"}[name]
             out = self._finish_run(runner, yards, True, self.dfn.lu["LB"][:2] + self.dfn.lu["S"][:2],
-                                   self.dfn.lu["DT"][:2] + self.dfn.lu["LB"][:1], label=f"{what}, keeps it")
+                                   self.dfn.lu["DT"][:2] + self.dfn.lu["LB"][:1], label=f"{what}, {label}")
             return out
-        holder = off.lu["P"][0]
-        tgt = (off.lu["TE"][:1] or off.lu["RB"][:1] or off.lu["WR"][:1])[0]
+        tgt = (off.lu["TE"][1:2] or off.lu["TE"][:1] or off.lu["RB"][:1] or off.lu["WR"][:1])[0]
         self.st(holder, "pass_att")
         self.ts(off, "pass_att")
         self.st(tgt, "targets")
-        if random.random() < surprise * 0.95:
+        arm = _clip(0.85 + (self.e(holder, "throw_power") + self.e(holder, "short_accuracy") - 100) / 400.0,
+                    0.8, 1.05)
+        if random.random() < surprise * 0.95 * arm:
             yards = min(to_goal, max(self.togo, int(random.gauss(self.togo + 6, 5))))
             self.st(holder, "pass_cmp")
             self.st(holder, "pass_yds", yards)
@@ -3480,12 +3654,7 @@ class GameSim:
             self.add_score(scoring, 2, "SAFETY")
             self._ot_check()
             if not self.game_over:
-                # Free kick from the 20
-                self.poss, self.dfn = off, scoring
-                self.yl = 20
-                p = self._punter(off)
-                dist = int(random.gauss(45 + (self.e(p, "punt_power") - 70) * 0.15, 5))
-                self._start_drive(scoring, _clip(100 - 20 - dist + random.randint(5, 15), 15, 50))
+                self.kickoff(off, from_yl=20, free=True)      # free kick from the 20
             return
 
         if out.get("td"):
