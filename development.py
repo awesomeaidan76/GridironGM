@@ -248,9 +248,9 @@ def yearly_change(player, team, gp=None, gs=None, last_season=None, detail=False
 
     if age < grow:
         years_left = max(1.0, grow - age + 1)
-        base = gap / years_left * 0.95 * settings["growth_rate"]
+        base = gap / years_left * GROWTH_PACE * settings["growth_rate"]
         expected = base * mult
-        change = expected * random.lognormvariate(0, 0.38)
+        change = expected * random.lognormvariate(GROWTH_LUCK_MU, GROWTH_LUCK_SD)
     elif age <= prime_end:
         wear = 0.0 if age < grow + 2 else 0.8 + (age - grow - 2) * 0.35
         base = gap * 0.20 * settings["growth_rate"]
@@ -359,6 +359,28 @@ def _staff_quote(player, ovr_change, seen, note, stage):
     return f"{first} more or less held his level."
 
 
+# A young player's growth each year is his expected growth times some luck (a lognormal draw with
+# mean GROWTH_LUCK_MEAN): some years he jumps, some he stalls. A player who grows faster than his
+# staff expected has shown them more, so part of the surprise carries into his ceiling, and a year
+# that falls short lowers it. Potential follows development instead of sitting fixed.
+GROWTH_PACE = 1.05         # expected growth a year = room left to his ceiling / years left x this
+GROWTH_LUCK_SD = 0.40
+GROWTH_LUCK_MEAN = 1.075
+GROWTH_LUCK_MU = math.log(GROWTH_LUCK_MEAN) - GROWTH_LUCK_SD ** 2 / 2
+GROWTH_CARRY = 0.5
+DRIFT_SPREAD = 1.0         # how far a young player's ceiling can drift in one offseason (x the base swing)
+
+
+def _carry_growth(player, surprise):
+    """Move his ceiling by part of this year's growth surprise (CA points), before the growth is capped."""
+    d = GROWTH_CARRY * surprise
+    if d > 0 and player.pa >= 160:
+        d *= 0.5                             # the very top is hard to raise further
+    d = int(round(d))
+    if d:
+        player.pa = max(player.ca, min(200, player.pa + d))
+
+
 def _drift_potential(player, team, last_season, surprise):
     """
     A young player's ceiling isn't fixed. Every offseason before his peak it
@@ -383,7 +405,7 @@ def _drift_potential(player, team, last_season, surprise):
     if weeks_missed >= 8:
         mu -= 1.5
     from player import DEV_SWING
-    sd = (1.0 + min(8.0, years) * 0.75) * DEV_SWING[player.dev_profile()]
+    sd = (1.0 + min(8.0, years) * 0.75) * DRIFT_SPREAD * DEV_SWING[player.dev_profile()]
     d = random.gauss(mu - 0.6, sd)           # centred so the league's ceiling doesn't creep up
     if d > 0 and player.pa >= 160:
         d *= 0.5                             # the very top is hard to raise further
@@ -415,6 +437,8 @@ def develop(player, team, last_season=None):
         note = "bust"
 
     change, expected, factors = yearly_change(player, team, last_season=last_season, detail=True)
+    if age < grow and note is None:
+        _carry_growth(player, change - expected * GROWTH_LUCK_MEAN)
     if note == "breakout":
         change += max(0, player.pa - player.ca) * 0.35
     target = int(round(player.ca + change))
@@ -461,6 +485,8 @@ def midseason(player, team, year):
     base = gap * 0.06 * (0.6 + work / 100.0 * 0.6) * (0.7 + snaps * 0.5) * settings["growth_rate"]
     form = getattr(player, "form_carry", 0.0)
     change = base + form * 0.25 + random.gauss(0, 1.2)
+    if player.age < grow:
+        _carry_growth(player, change - base)
     target = int(round(player.ca + change))
     target = max(1, min(player.pa, target)) if change > 0 else max(1, target)
     if target == player.ca:

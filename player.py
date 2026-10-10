@@ -632,9 +632,39 @@ def _age_modifier(attr, position, age):
     return (min(age, 30) - 25) * 0.8
 
 
+# Young players are a long way from their peak and grow fast (about 3 OVR a year at 21-23), so
+# their potential stands well above their rating until the last seasons before the peak.
+# Quarterbacks and kickers already develop slowly for longer and keep the plain gap.
+YOUTH_GAP = 1.45
+SLOW_DEVELOPERS = ("QB", "K", "P")
+
+
+def youth_gap(position):
+    return 1.0 if position in SLOW_DEVELOPERS else YOUTH_GAP
+
+
+def _expected_growth(position, age):
+    """CA a player of this age usually still adds before his peak (front-loaded, as development.py grows)."""
+    grow = AGE_CURVES[position][0]
+    if age > grow:
+        return 0.0
+    return youth_gap(position) * sum({0: 0.8, 1: 2.0, 2: 3.5}.get(grow - a, 5.0) for a in range(age, grow + 1))
+
+
 def generate_player(position, age, target_ca, pa=None, archetype=None,
-                    archetype_weights=None, name=None):
-    """Create a player at `position` whose CA lands on `target_ca`."""
+                    archetype_weights=None, name=None, youth=True):
+    """
+    Create a player at `position` whose CA lands on `target_ca`. Without a given `pa`, a young
+    player is generated below the target by his extra headroom (YOUTH_GAP) so that his ceiling
+    stays where the target puts it; with youth=False (a new league's starters, which the match
+    engine is calibrated around) he lands on the target with the plain gap.
+    """
+    exp_growth = _expected_growth(position, age) if pa is None else 0.0
+    if exp_growth and not youth:
+        exp_growth /= youth_gap(position)
+    elif exp_growth and youth_gap(position) > 1.0:
+        room = max(0.25, min(1.1, (190 - target_ca) / 90.0))
+        target_ca = max(45, int(round(target_ca - exp_growth * room * (1 - 1 / youth_gap(position)))))
     p = Player(name or names.random_name(), position, age)
     p.archetype = archetype or choose_archetype(position, archetype_weights)
     arch_mods = ARCHETYPES.get(position, {}).get(p.archetype, (0, {}, ""))[1]
@@ -687,12 +717,9 @@ def generate_player(position, age, target_ca, pa=None, archetype=None,
 
     # Potential
     if pa is None:
-        grow = AGE_CURVES[position][0]
-        years = max(0, grow - age + 1)
-        if years > 0:
-            # Growth is front-loaded: ~5 a year while young, tapering in the last seasons before
+        if exp_growth:
+            # Growth is front-loaded: ~6.5 a year while young, tapering in the last seasons before
             # the peak (matches what development.py actually produces)
-            exp_growth = sum({0: 0.8, 1: 2.0, 2: 3.5}.get(grow - a, 5.0) for a in range(age, grow + 1))
             gap = max(0.0, random.gauss(exp_growth, exp_growth * 0.42 + 3))
             if random.random() < 0.10:
                 gap += abs(random.gauss(12, 6))

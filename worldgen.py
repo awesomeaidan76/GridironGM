@@ -13,6 +13,7 @@ from contracts import market_value, rookie_salary, make_contract, contract_lengt
 from eras import FOUNDING_LABEL, POS_GROUP, archetype_weights_for, random_landscape
 from league import League, TEAM_DATA
 from player import generate_player
+from position_fit import STARTERS
 from ratings import ROSTER_TEMPLATE, POSITIONS
 from settings import settings
 from team import Team
@@ -69,7 +70,8 @@ def build_roster(team, strength, era, league):
             # Young stars are rarer than prime-age stars
             if age <= 23 and target > 138:
                 target -= random.randint(5, 20)
-            p = generate_player(pos, age, target, archetype_weights=arch_w.get(pos))
+            p = generate_player(pos, age, target, archetype_weights=arch_w.get(pos),
+                                youth=i >= STARTERS.get(pos, 1))
             team.add_player(p)
 
 
