@@ -182,6 +182,54 @@ listed position gets `snaps_mood` (adaptability helps, ambitious stars mind).
 each rating with a fixed-per-season error of max(0.5, (20 − position coach
 development)/20 × 5).
 
+## 2c. Package slots and personnel: `packages.py`
+
+**Package slots** are extra depth lists (`PACKAGE_SLOTS`: slot → base
+position, role formulas, players on the field, adds-or-replaces, label):
+3DRB and PWRB (RB), SLOT (WR), JTE (TE), RE (EDGE), RDT (DT), SUBLB (LB), NCB
+(CB) and S3 (S). They are in `position_fit.DEPTH_SLOTS`, so the user's
+overrides, locks and auto sort work on them. A package plays its base
+position: `base_of(slot)` maps it before every familiarity, size, deltas and
+learning call, and the engine labels its players with the base position.
+`package_ca` is the best of its `ratings.role_ca` formulas on his attributes
+with that base position's `slot_deltas` (`Player.rating_at` / `ovr_at` use
+it); a package's POT is the base position's POT shifted by (package OVR − base
+OVR). The natural pool is `POOL` (PWRB also takes fullbacks).
+`weekly_learning` gives package reps at the base position, only above what
+the base list already gave.
+
+"Adds" packages (SLOT, JTE, NCB, S3) put men on beside the base starters
+(`BASE_STARTERS` = 2 of the base list). Auto order (`Team._package_last`)
+lists the base starters last, so a package left alone adds the next best men
+and the CPU plays as before. When the user has set the list
+(`Side.pk_set`), `GameSim._adds` picks the package players first and the base
+list fills around them. `_fill` tops a short package list up from its base
+position. "Replace" packages: `_backfield` takes the third-down and power
+backs from 3DRB/PWRB (the user's list as set; a CPU staff only when the
+package rating beats the lead back's); on passing downs
+(`_passing_down`: 3rd and 7+, 2nd and 12+, 4th and 5+, hurry-up) the defense plays its
+RDT and RE lists; nickel, big nickel, dime and quarter take their linebackers
+from SUBLB.
+
+**Personnel** codes are backs then tight ends (`personnel_counts`; receivers
+are the rest of five). `_personnel` weights 11/12/21/22/10 plus 13 (0.02 +
+0.07 × heavy, if the club has three tight ends or a JTE list; +0.12 in short
+yardage), 20 (0.012 + 0.02 × tempo with two backs; Pistol and Spread Option
++0.02) and 23 (goal line at the 3 or closer with a fullback and three tight
+ends). `playbook.PERSONNEL_SLOTS` has the slots for each (TE3 for the third
+tight end; in 20 the FB slot is the second back) and `playbook.route_for`
+gives TE3 the SL or Z route when a play has none for him.
+
+**Defensive packages** (`DEF_PACKAGES`: DT, EDGE, LB, CB, S counts) are picked
+by `choose_def_package` from the offense's personnel, never its play: Quarter
+late and long, Goal Line at the 2 or in short yardage against heavy sets, Dime
+against four or more receivers, Nickel against three (Big Nickel 4-20% of the
+time), Big Nickel against two or three tight ends by the coordinator's lean
+(`_big_nickel_lean`: two-high coverage tendency and the third safety's
+rating), Nickel on 3rd and 7+ against two receivers (55%), otherwise Base or
+3-4 Base. A no-huddle snap keeps the last package. Team stats count `pers|`
+and `dpkg|` snaps.
+
 ## 3. A game: `engine.GameSim`
 
 1. **Setup.**
@@ -193,7 +241,7 @@ development)/20 × 5).
    2. Check for a pre-snap penalty.
    3. Choose the call: a trick play, an RPO, a pass, or a run. The pass probability depends on down, distance, field position, game script (score × time remaining), urgency and weather.
    3b. The defence makes its own call without seeing the offence's (`defense.choose_call`): a front (Over, Under, Wide 9, Bear, Odd, Tite, Goal Line), a named coverage (Cover 0/1/1 Robber/2/Tampa 2/2-Man/3 Sky/Buzz/Match/4/6, Prevent), and sometimes a pressure (fire zone, nickel fire, Cover 1 and safety blitzes, double A-gap, Cover 0), a simulated pressure (Creeper) or a line stunt (TEX, ET, Twist, Pirate). Each has small opposite-signed effects: coverage-vs-route "beaters" (`defense.COV_EDGE`), run-fit changes by front and shell, extra rushers who leave receivers uncovered, stunts that a sharp line passes off.
-   4. Pick personnel and formation, then the defensive personnel.
+   4. Pick personnel and formation, then the defensive package (section 2c).
    5. **Pass:** choose the concept (screen/short/medium/deep, play-action, flea-flicker). Pressure is a sigmoid of pass rush minus protection; under pressure the QB is sacked, scrambles or throws it away. Each receiver gets an *openness* score from route skill vs coverage. The QB's read is a softmax over the receivers, sharper for better processors. Then roll completion, interception and drops, and draw yards after the catch from an exponential distribution plus breakaway chances.
    6. **Run:** choose the concept (inside/outside zone, power, counter, trap, lead, draw, toss, buck sweep, jet sweep, reverse, and the option family: zone read, inverted veer, midline, speed and triple option) from the coach's system (`playbook.SCHEME_RUNS`). Option plays read an unblocked defender: the QB's decision making against the defender's recognition decides give, keep or pitch and whether the read was right. Blocking vs the front (plus the defensive call) gives `bd`; carrier skill vs tacklers gives `rd`. These set the stuff chance, a short "sure" gain (Gaussian), a long-tailed extra (exponential) and breakaway chances — the NFL shape: median 3 yards, mean ~4.3, about 10% of runs going for 10+.
    7. Resolve: post-snap penalties, injuries, momentum swings, the clock, first downs and turnovers.

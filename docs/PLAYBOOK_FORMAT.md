@@ -35,9 +35,14 @@ offense:
 | 21 | X, Z, TE, FB, RB |
 | 22 | X, TE, TE2, FB, RB |
 | 10 | X, Z, SL, SL2, RB |
+| 13 | X, TE, TE2, TE3, RB |
+| 20 | X, Z, SL, FB, RB |
+| 23 | TE, TE2, TE3, FB, RB |
 
 The offensive line is added automatically. X is the split end, Z the
-flanker, SL/SL2 the slot receivers, and TE/TE2 the tight ends.
+flanker, SL/SL2 the slot receivers, and TE/TE2/TE3 the tight ends. In 20
+personnel the FB spot is a second running back. A pass play with no route for
+TE3 gives him the SL route (or Z's); a slot with no route at all blocks.
 
 ## Routes
 

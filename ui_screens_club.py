@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QGri
 import capplan
 import free_agency as fa
 import inbox
+import packages
 import position_fit as fit
 import roster_rules as rr
 from coach import COACH_RATINGS, COACH_RATING_LABELS, OFFENSIVE_SCHEMES, DEFENSIVE_SCHEMES
@@ -674,10 +675,15 @@ class DepthChartScreen(Screen):
         self.slots = QListWidget()
         self.slots.setMaximumWidth(190)
         for s in DEPTH_SLOTS:
-            label = {"KR": "Kick Returner", "PR": "Punt Returner"}.get(s, f"{s} · {POSITION_NAMES[s]}"
-                                                                           if s in POSITION_NAMES else s)
+            if packages.is_package(s):
+                label = f"{s} · {packages.label(s)}"
+            else:
+                label = {"KR": "Kick Returner", "PR": "Punt Returner"}.get(s, f"{s} · {POSITION_NAMES[s]}"
+                                                                               if s in POSITION_NAMES else s)
             it = QListWidgetItem(label)
             it.setData(USER_ROLE, s)
+            if packages.is_package(s):
+                it.setToolTip(f"Package: {packages.when(s)}. Rated as a {' / '.join(packages.PACKAGE_SLOTS[s][1])}.")
             self.slots.addItem(it)
         self.slots.currentRowChanged.connect(lambda _r: self._show_slot())
         body.addWidget(self.slots)
@@ -814,7 +820,7 @@ class DepthChartScreen(Screen):
 
     def _fit_cell(self, p, slot):
         if fit.natural(p, slot):
-            return cell("Natural" if p.position == slot else "", 100)
+            return cell("Natural" if p.position == packages.base_of(slot) else "", 100)
         fam = fit.familiarity(p, slot)
         label = fit.familiarity_label(fam)
         under, over = fit.size_gap(p, slot)
@@ -828,7 +834,9 @@ class DepthChartScreen(Screen):
     def _show_slot(self):
         slot = self._slot()
         team = self.user
-        self.slot_title.setText({"KR": "Kick Returner", "PR": "Punt Returner"}.get(
+        pkg = packages.is_package(slot)
+        base = packages.base_of(slot)
+        self.slot_title.setText(packages.label(slot) if pkg else {"KR": "Kick Returner", "PR": "Punt Returner"}.get(
             slot, POSITION_NAMES.get(slot, slot)))
         self.keep_sorted.blockSignals(True)
         self.keep_sorted.setChecked(bool(team.depth_auto))
@@ -836,9 +844,9 @@ class DepthChartScreen(Screen):
         listed, others = self._candidates(slot)
         self._listed_ids = [p.id for p in listed]
         rows, keys = [], []
-        n_start = STARTERS.get(slot, 1)
+        n_start = packages.starters(slot) if pkg else STARTERS.get(slot, 1)
         healthy_rank = 0
-        unit = "def_snaps" if slot in fit.DEFENSE_SLOTS else "off_snaps"
+        unit = "def_snaps" if base in fit.DEFENSE_SLOTS else "off_snaps"
         team_snaps = max([p.season_stats[unit] for p in team.roster] + [1])
         locks = set((team.depth_locks or {}).get(slot, []))
         two = team.two_slot_starters() if slot not in RETURN_SLOTS else {}
@@ -857,11 +865,13 @@ class DepthChartScreen(Screen):
                 status, col = "Holding out", T("bad")
             elif not on_list:
                 status, col = "Not on this list", T("muted")
+            elif starter and pkg:
+                status, col = "In the package", None
             elif starter and elsewhere:
                 status, col = f"Starter (also starts at {', '.join(elsewhere)})", T("warn")
             else:
                 status, col = ("Starter" if starter else ""), None
-            own = p.position == slot or slot in RETURN_SLOTS
+            own = p.position == base or slot in RETURN_SLOTS
             pos_tip = None if own else f"{p.ovr} at his own position ({p.position})"
             if p.converted_from:
                 pos_tip = fit.conversion_status(p) + ("" if own else f"; {p.ovr} at {p.position}")
@@ -890,6 +900,9 @@ class DepthChartScreen(Screen):
         slot = self._slot()
         pid = self.order.selected_key()
         p = self.user.get_player(pid) if pid is not None else None
+        if packages.is_package(slot):
+            self.fit_note.setText(self._package_note(p, slot))
+            return
         if p is None or slot in RETURN_SLOTS:
             self.fit_note.setText("")
             return
@@ -912,11 +925,29 @@ class DepthChartScreen(Screen):
             tail += f". He is training {slot} as his second position"
         self.fit_note.setText("; ".join(parts) + tail + ".")
 
+    def _package_note(self, p, slot):
+        """What a package list is for, and how the selected player rates in it."""
+        base = packages.base_of(slot)
+        text = (f"{packages.when(slot)}. Players here play {base} (familiarity and size are his {base}'s) "
+                f"and are rated by the {' / '.join(packages.PACKAGE_SLOTS[slot][1])} formula.")
+        if p is None:
+            return text
+        v = p.ovr_at(slot)
+        who = f"{p.position} {p.ovr}"
+        line = f"<b>{p.name}</b> ({who}) rates <b>{v}</b> as a {packages.best_role(p, slot)}"
+        if not fit.natural(p, base):
+            fam = fit.familiarity(p, base)
+            line += f", still learning {base} ({fit.familiarity_label(fam).lower()}, {fam:.0f}/100)"
+            note = fit.size_note(p, base)
+            if note:
+                line += f"; {note}"
+        return line + ". " + text
+
     ROT_GROUPS = {"DT": "DL", "EDGE": "DL", "LB": "LB", "CB": "DB", "S": "DB", "WR": "WR", "TE": "TE",
                   "RB": "RB", "OT": "OL", "IOL": "OL"}
 
     def _show_rotation(self, slot):
-        grp = self.ROT_GROUPS.get(slot)
+        grp = self.ROT_GROUPS.get(packages.base_of(slot))
         self.rot_combo.setEnabled(grp is not None)
         self.rot_combo.blockSignals(True)
         cur = (self.user.rotation or {}).get(grp, "normal") if grp else "normal"
@@ -928,7 +959,7 @@ class DepthChartScreen(Screen):
             if grp else "Quarterbacks, kickers and returners don't rotate (except in blowouts).")
 
     def _rotation_changed(self):
-        grp = self.ROT_GROUPS.get(self._slot())
+        grp = self.ROT_GROUPS.get(packages.base_of(self._slot()))
         if not grp:
             return
         team = self.user
@@ -1007,8 +1038,8 @@ class DepthChartScreen(Screen):
         if p is None:
             return
         if pid in self._listed_ids:
-            if p.position == slot:
-                info(self, "Depth Chart", f"{p.name} is a {slot}, so he stays on this list. "
+            if p.position == slot or packages.in_pool(p, slot):
+                info(self, "Depth Chart", f"{p.name} is a {p.position}, so he stays on this list. "
                                           "Move him down instead.")
                 return
             team.depth_overrides[slot] = [i for i in self._listed_ids if i != pid]
@@ -1051,6 +1082,7 @@ class DepthChartScreen(Screen):
             if slot not in RETURN_SLOTS:
                 locked = pid in (self.user.depth_locks or {}).get(slot, [])
                 acts.append(("Unlock" if locked else "Lock in place", lambda: self._toggle_lock(pid)))
+        slot = packages.base_of(slot)                   # a package's permanent move is to its base position
         if slot not in RETURN_SLOTS and slot != p.position:
             acts.append((None, None))
             back = " (back to his old position)" if slot == p.converted_from else ""
@@ -1137,7 +1169,8 @@ class DepthChartScreen(Screen):
         kr, pr = team.returner("KR"), team.returner("PR")
 
         def name(p, pos):
-            tag = "" if p.position == pos else f" <span style='color:{T('warn')}'>({p.position})</span>"
+            tag = "" if p.position == packages.base_of(pos) else \
+                f" <span style='color:{T('warn')}'>({p.position})</span>"
             return f"{p.name}{tag} <span style='color:{ovr_color(p.ovr_at(pos))}'>{p.ovr_at(pos)}</span>"
 
         def line(pos, players):
@@ -1146,6 +1179,16 @@ class DepthChartScreen(Screen):
         de = [line(k, s[k]) for k in ("DT", "EDGE", "LB", "CB", "S")]
         st = [line(k, s[k]) for k in ("K", "P")]
         st.append(f"<b>KR</b> {kr.name if kr else '—'} · <b>PR</b> {pr.name if pr else '—'}")
+        pk = []
+        rb1 = s["RB"][0] if s["RB"] else None
+        for slot in packages.PACKAGE_ORDER:
+            players = team.lineup(slot, packages.starters(slot))
+            if slot in ("3DRB", "PWRB") and players and players[0] is rb1:
+                pk.append(f"<b>{slot}</b> <span style='color:{T('muted')}'>the lead back stays on</span>")
+            elif players:
+                pk.append(f"<b>{slot}</b> " + ", ".join(name(p, slot) for p in players))
+            else:
+                pk.append(f"<b>{slot}</b> <span style='color:{T('muted')}'>— (filled from {packages.base_of(slot)})</span>")
         warn = []
         byid = {p.id: p for p in team.roster}
         for pid, slots in team.two_slot_starters().items():
@@ -1165,7 +1208,7 @@ class DepthChartScreen(Screen):
                 if note:
                     warn.append(f"{p.name} is {note}")
         text = "<br>".join(["<u>Offense</u>"] + off + ["", "<u>Defense</u>"] + de
-                           + ["", "<u>Special Teams</u>"] + st)
+                           + ["", "<u>Special Teams</u>"] + st + ["", "<u>Packages</u>"] + pk)
         if warn:
             text += f"<br><br><span style='color:{T('warn')}'><b>Warnings</b><br>" + \
                 "<br>".join("• " + w for w in warn) + "</span>"

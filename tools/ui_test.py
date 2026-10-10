@@ -355,6 +355,39 @@ def main():
     dc.everyone.setChecked(False)
     CONVERTED = (cb, fit.familiarity(cb, "S"))
     step(f"position change: CB to S ({cb.ovr} OVR, pot {cb.pot})")
+    # Package slots: the auto nickel list skips the starting corners; a backup safety as the
+    # nickel back and a backup receiver in the slot
+    user.depth_overrides.pop("NCB", None)
+    starting_cbs = {p.id for p in user.depth("CB")[:2]}
+    assert user.depth("NCB")[0].id not in starting_cbs, "auto NCB list should add the next corner"
+    nb = user.depth("S")[2]
+    slot_wr = user.depth("WR")[3]
+    dc.slots.setCurrentRow(DEPTH_SLOTS.index("NCB"))
+    assert dc.slot_title.text() == "Nickel and Dime Backs"
+    assert "Package" in dc.fit_note.text() or "nickel" in dc.fit_note.text(), dc.fit_note.text()
+    dc.everyone.setChecked(True)
+    row = next(r for r in range(dc.order.rowCount()) if dc.order.key_at(r) == nb.id)
+    dc.order.selectRow(row)
+    dc._add_remove()
+    dc._to_top(nb.id)
+    assert user.depth("NCB")[0] is nb
+    dc.order.selectRow(0)
+    dc._show_fit()
+    assert "rates" in dc.fit_note.text() and "CB" in dc.fit_note.text(), dc.fit_note.text()
+    acts = menu_for(nb)
+    assert "Move to CB permanently…" in acts and "Train CB as his second position" in acts, list(acts)
+    lo, hi = nb.pot_range_at("NCB", user.scouting)
+    assert nb.ovr_at("NCB") <= lo <= hi <= 99, (nb.ovr_at("NCB"), lo, hi)
+    dc.everyone.setChecked(False)
+    dc.slots.setCurrentRow(DEPTH_SLOTS.index("SLOT"))
+    dc._to_top(slot_wr.id)
+    assert user.depth("SLOT")[0] is slot_wr
+    dc._lineup()
+    assert "Packages" in dc.lineup_text.text() and nb.name in dc.lineup_text.text()
+    dc.slots.setCurrentRow(DEPTH_SLOTS.index("3DRB"))
+    dc._auto()
+    PACKAGE = (nb, fit.familiarity(nb, "CB"), slot_wr)
+    step(f"package slots: S {nb.name} at NCB ({nb.ovr_at('NCB')}), WR {slot_wr.name} in the slot")
     tac = win.screens["tactics"]
     for key, (s, _) in tac.sliders.items():
         s.setValue(80)
@@ -449,6 +482,20 @@ def main():
     if cb.team == lg.user_abbr and cb.converted_from:
         assert fit.familiarity(cb, "S") > cfam0, (cfam0, fit.familiarity(cb, "S"))
         step(f"learning S after the move: {cfam0:.0f} -> {fit.familiarity(cb, 'S'):.0f}")
+    nb, nfam0, slot_wr = PACKAGE
+    hurt = any(h[0] == lg.year for q in (nb, slot_wr) for h in q.injury_history) or nb.injury or slot_wr.injury
+    if nb.team == lg.user_abbr and slot_wr.team == lg.user_abbr and not hurt:
+        games = max(1, max(p.season_stats.get("gp", 0) for p in user.roster))
+
+        def share(p, unit):
+            # share of the team's snaps in the games he played (an injury can cost him a game or two)
+            per_game = max(q.season_stats[unit] for q in user.roster) / games
+            return p.season_stats[unit] / max(1, p.season_stats.get("gp", 0)) / max(1.0, per_game)
+        nb_share, wr_share = share(nb, "def_snaps"), share(slot_wr, "off_snaps")
+        assert fit.familiarity(nb, "CB") > nfam0, (nfam0, fit.familiarity(nb, "CB"))
+        assert nb_share > 0.2 and wr_share > 0.2, (nb_share, wr_share, [p.name for p in user.depth("SLOT")[:3]])
+        step(f"packages on the field: nickel back {nb_share:.0%} of snaps (CB {nfam0:.0f} -> "
+             f"{fit.familiarity(nb, 'CB'):.0f}), slot receiver {wr_share:.0%}")
     wr, fam0 = OOP_PLAYER
     if wr.team == lg.user_abbr and lg.week >= 1:
         assert fit.familiarity(wr, "RB") > fam0, (fam0, fit.familiarity(wr, "RB"))

@@ -27,6 +27,7 @@ import trenches
 import grades
 import situations as sit_lib
 import position_fit as fit
+import packages
 from coach import sit_tendency, SCHEME_EXECUTION
 
 QUARTER = 900
@@ -170,6 +171,12 @@ class Side:
         iol = take("IOL", 3)
         self.ol = ots[:1] + iol + ots[1:2]
         self.ol_slots = ["OT"] * len(ots[:1]) + ["IOL"] * len(iol) + ["OT"] * len(ots[1:2])
+        # Package lists (third-down back, slot receivers, nickel backs...) and whether the user set them
+        for slot in packages.PACKAGE_ORDER:
+            self.lu[slot] = t.lineup(slot, packages.starters(slot) + 2)
+        self.pk_set = {slot for slot in packages.PACKAGE_ORDER if t.depth_overrides.get(slot)}
+        self.n_te = len(t.depth("TE"))
+        self.last_pkg = getattr(self, "last_pkg", None)
         self._backfield()
         self.sim._prime(self)
 
@@ -206,21 +213,26 @@ class Side:
                   "Receiving Back": -0.09}.get(rb1.archetype, 0.0)
         share = max(0.42, min(0.93, share))
 
-        def recv(p):
-            return p.a("catching") * 0.4 + p.a("short_route_running") * 0.3 + p.a("pass_block") * 0.3
-
-        def power(p):
-            return p.a("strength") * 0.3 + p.a("break_tackle") * 0.35 + p.a("contact_balance") * 0.35
-
-        top = rbs[:3]
-        third = max(top, key=recv)
-        if third is rb1 or recv(third) < recv(rb1) + 6:
-            third = None
-        goal = max(top, key=power)
-        if goal is rb1 or power(goal) < power(rb1) + 5:
-            goal = None
+        third = self._specialist("3DRB", rb1)
+        goal = self._specialist("PWRB", rb1)
         self.bf = {"rb1": rb1, "rb2": rb2, "rb3": rbs[2] if len(rbs) > 2 else None,
                    "share": share, "third": third, "goal": goal, "committee": c}
+
+    def _specialist(self, slot, rb1, margin=0.0):
+        """
+        The first man on a backfield package list, if he is not the lead back. The
+        user's list is followed as set; a CPU staff uses him only when he is better
+        in that role than the lead back.
+        """
+        lst = [p for p in self.lu.get(slot, []) if p is not rb1]
+        if not lst:
+            return None
+        p = lst[0]
+        if slot in self.pk_set:
+            return None if self.lu[slot][0] is rb1 else p
+        if p.rating_at(slot) < rb1.rating_at(slot) + margin:
+            return None
+        return p
 
     @property
     def qb(self):
@@ -478,6 +490,7 @@ class GameSim:
         another slot this snap, who are skipped.
         """
         pool = side.lu.get(pos, [])
+        rot_pos = packages.base_of(pos)
         if used:
             free = [p for p in pool if p.id not in used]
             if len(free) < len(pool) and len(free) < n + 1:
@@ -492,8 +505,8 @@ class GameSim:
                 if pos != "QB":
                     out = (bench + out)[:n]
             elif not lock:
-                style = (getattr(side.team, "rotation", None) or {}).get(ROT_GROUP.get(pos, ""), "normal")
-                k = POS_ROTATION.get(pos, 0.8) * ROTATION_STYLE.get(style, 1.0)
+                style = (getattr(side.team, "rotation", None) or {}).get(ROT_GROUP.get(rot_pos, ""), "normal")
+                k = POS_ROTATION.get(rot_pos, 0.8) * ROTATION_STYLE.get(style, 1.0)
                 if k > 0:
                     cand = out + bench
                     env = [self._rating(p, pos) for p in cand]
@@ -1677,12 +1690,18 @@ class GameSim:
         plan = self.poss.plan
         heavy = plan["heavy"]
         short = self.togo <= 2 or self.yl >= 96
+        side = self.poss
+        has_fb = bool(side.team.players_at("FB"))
+        three_te = side.n_te >= 3 or "JTE" in side.pk_set
         w = {
             "11": max(0.05, 0.64 - 0.38 * heavy),
             "12": 0.12 + 0.22 * heavy,
-            "21": (0.03 + 0.14 * heavy) if self.poss.team.players_at("FB") else 0.0,
+            "21": (0.03 + 0.14 * heavy) if has_fb else 0.0,
             "10": 0.03 + 0.10 * plan["tempo"] + 0.14 * max(0, plan["pass_rate"] - 0.58),
             "22": 0.01,
+            "13": (0.02 + 0.07 * heavy) if three_te else 0.0,
+            "20": 0.012 + 0.02 * plan["tempo"] if len(side.lu["RB"]) >= 2 else 0.0,
+            "23": 0.0,
         }
         scheme = self.poss.team.coach.off_scheme
         if scheme == "Flexbone":
@@ -1693,22 +1712,53 @@ class GameSim:
             w["10"] += 0.30
         elif scheme == "Pistol":
             w["12"] += 0.08
+            w["20"] += 0.02 if w["20"] else 0.0
+        elif scheme == "Spread Option":
+            w["20"] += 0.02 if w["20"] else 0.0
         if short:
             w["22"] += 0.35
             w["12"] += 0.25
             w["21"] += 0.15 if w["21"] else 0.0
+            w["13"] += 0.12 if w["13"] else 0.0
             w["10"] *= 0.3
+            w["20"] *= 0.3
+            if self.yl >= 97 and has_fb and three_te:
+                w["23"] += 0.22             # goal-line jumbo: three tight ends and two backs
         if self.urgency(self.poss) == "hurry":
             w["10"] += 0.25
-            w["22"] = 0.0
+            w["22"] = w["13"] = w["23"] = 0.0
         keys = list(w)
         return random.choices(keys, weights=[w[k] for k in keys], k=1)[0]
 
+    def _adds(self, side, pkg, base, n_pkg, n_base, lock=False, used=None):
+        """
+        A package that puts extra men beside the base starters (slot receivers,
+        nickel backs, a third safety or tight end). When the user has set the
+        package list, its players are picked first and the base list fills around
+        them; otherwise the base starters come first and the package adds the next men.
+        """
+        if n_pkg <= 0:
+            return self._rotate(side, base, n_base, lock, used), []
+        if pkg in side.pk_set:
+            extra = self._fill(side, pkg, n_pkg, lock, used)
+            core = self._rotate(side, base, n_base, lock, used)
+        else:
+            core = self._rotate(side, base, n_base, lock, used)
+            extra = self._fill(side, pkg, n_pkg, lock, used)
+        return core, extra
+
+    def _fill(self, side, pos, n, lock=False, used=None):
+        """_rotate, and a package list that runs short is topped up from its base position."""
+        out = self._rotate(side, pos, n, lock, used)
+        if len(out) < n and pos in packages.PACKAGE_SLOTS:
+            out += self._rotate(side, packages.base_of(pos), n - len(out), lock, used)
+        return out
+
     def _formation(self, pers):
         lu = self.poss.lu
-        wr_n = {"11": 3, "12": 2, "21": 2, "10": 4, "22": 1}[pers]
-        te_n = {"11": 1, "12": 2, "21": 1, "10": 0, "22": 2}[pers]
-        fb = pers in ("21", "22")
+        n_rb, te_n, wr_n = packages.personnel_counts(pers)
+        fb = pers in ("21", "22", "23")
+        two_rb = pers == "20"
         side = self.poss
         # One spot per player per snap: the quarterback and the line first, then the back,
         # tight ends and receivers; a player listed twice plays the first, the next man the other
@@ -1721,15 +1771,32 @@ class GameSim:
             rb = next((p for p in lu["RB"] + side.more("RB") if p.id not in used), None)
         if rb is not None:
             used.add(rb.id)
-        tes = self._rotate(side, "TE", te_n, used=used) if te_n else []
-        wrs = self._rotate(side, "WR", wr_n, used=used)
-        fbp = next((p for p in lu["FB"] + side.more("FB") if p.id not in used), None) \
-            if fb and lu["FB"] else None
+        if te_n >= 3:
+            tes, jumbo = self._adds(side, "JTE", "TE", te_n - 2, 2, used=used)
+            tes = tes + jumbo
+        else:
+            tes = self._rotate(side, "TE", te_n, used=used) if te_n else []
+        if wr_n >= 3:
+            outs, slots = self._adds(side, "SLOT", "WR", wr_n - 2, 2, used=used)
+            wrs = outs + slots
+        else:
+            wrs = self._rotate(side, "WR", wr_n, used=used) if wr_n else []
+        if two_rb:
+            # 20 personnel: a second running back (the third-down back if there is one) beside the first
+            fbp = next((p for p in [side.bf["third"] if side.bf else None] + lu["RB"] + side.more("RB")
+                        if p is not None and p.id not in used), None)
+        else:
+            fbp = next((p for p in lu["FB"] + side.more("FB") if p.id not in used), None) \
+                if fb and lu["FB"] else None
+        if fbp is not None:
+            used.add(fbp.id)
+        self._pers = pers
         return wrs, tes, rb, fbp
 
     def _off_slots(self, off, wrs, tes):
         """Slot labels for _snap_units, parallel to [qb] + ol + wrs + tes + [rb, fbp]."""
-        return ["QB"] + off.ol_slots + ["WR"] * len(wrs) + ["TE"] * len(tes) + ["RB", "FB"]
+        return ["QB"] + off.ol_slots + ["WR"] * len(wrs) + ["TE"] * len(tes) + \
+            ["RB", "RB" if getattr(self, "_pers", None) == "20" else "FB"]
 
     @staticmethod
     def _def_slots(dts, edges, lbs, cbs, ss):
@@ -1791,10 +1858,10 @@ class GameSim:
     def _slot_map(self, pers, wrs, tes, rb, fbp):
         """Which player lines up in which formation slot."""
         out = {}
-        wr_slots = ["X", "Z", "SL", "SL2"] if pers != "22" else ["X"]
+        wr_slots = ["X"] if pers in ("22", "13") else [] if pers == "23" else ["X", "Z", "SL", "SL2"]
         for s, p in zip(wr_slots, wrs):
             out[s] = p
-        for s, p in zip(["TE", "TE2"], tes):
+        for s, p in zip(["TE", "TE2", "TE3"], tes):
             out[s] = p
         if rb is not None:
             out["RB"] = rb
@@ -1802,25 +1869,52 @@ class GameSim:
             out["FB"] = fbp
         return out
 
-    def _defense_set(self, wr_count):
-        lu = self.dfn.lu
-        if wr_count >= 4 and self.poss.team.coach.off_scheme == "Flexbone":
-            wr_count = 2                    # slotbacks are treated as backs: base defense
-        front = self.dfn.plan["front"]
+    def _passing_down(self):
+        return (self.down == 3 and self.togo >= 7) or (self.down == 2 and self.togo >= 12) or \
+            (self.down == 4 and self.togo >= 5) or self.urgency(self.poss) == "hurry"
+
+    def _big_nickel_lean(self, d):
+        """How much this coordinator likes a third safety against tight ends (0-1)."""
+        s3 = d.lu.get("S3") or []
+        lbs = d.lu.get("LB") or []
+        if not s3:
+            return 0.0
+        lean = 0.15 + 0.35 * d.plan.get("two_high", 0.5)
+        if "S3" in d.pk_set:
+            lean += 0.25
+        if len(lbs) >= 3:
+            lean += _clip((s3[0].rating_at("S3") - lbs[2].rating_at("LB")) / 40.0, -0.3, 0.3)
+        return _clip(lean, 0.0, 0.9)
+
+    def _defense_set(self, pers):
+        """The defense's package for this snap (matched to the offense's personnel) and who plays."""
         d = self.dfn
+        if pers == "10" and self.poss.team.coach.off_scheme == "Flexbone":
+            pers = "21"                     # slotbacks are treated as backs: base defense
         lock = self.no_huddle             # no time to substitute against a no-huddle offense
+        if lock and d.last_pkg:
+            pkg = d.last_pkg
+        else:
+            to_goal = 100 - self.yl
+            late_long = to_goal >= 35 and ((self.quarter in (2, 4) and self.clock <= 12) or
+                                           (self.down == 4 and self.togo >= 15 and self.quarter == 4
+                                            and self.clock <= 90 and self.poss.score < d.score))
+            pkg = packages.choose_def_package(pers, d.plan["front"], to_goal, self.togo, self.down,
+                                              late_long, self._big_nickel_lean(d), random)
+        d.last_pkg = pkg
+        self.ts(d, f"dpkg|{pkg}")
+        n_dt, n_edge, n_lb, n_cb, n_s = packages.DEF_PACKAGES[pkg]
+        rush = self._passing_down() and pkg not in ("Goal Line", "Base", "3-4 Base")
         used = set()
-        dts = self._rotate(d, "DT", 2, lock, used)
-        edges = self._rotate(d, "EDGE", 2, lock, used)
-        n_lb, n_cb, n_s = (1, 4, 3) if wr_count >= 4 else (2, 3, 2) if wr_count == 3 else (3, 2, 2)
-        if front == "3-4" and wr_count <= 2 and len(lu["DT"]) > 0:
-            for p in dts[1:]:
-                used.discard(p.id)
-            dts = dts[:1]
-            n_lb = 4
-        lbs = self._rotate(d, "LB", n_lb, lock, used)
-        cbs = self._rotate(d, "CB", n_cb, lock, used)
-        ss = self._rotate(d, "S", n_s, lock, used)
+        dts = self._fill(d, "RDT" if rush else "DT", n_dt, lock, used)
+        edges = self._fill(d, "RE" if rush else "EDGE", n_edge, lock, used)
+        sub = pkg in ("Nickel", "Big Nickel", "Dime", "Quarter")
+        lbs = self._fill(d, "SUBLB" if sub else "LB", n_lb, lock, used)
+        core, extra = self._adds(d, "NCB", "CB", n_cb - 2, min(2, n_cb), lock, used)
+        cbs = core + extra
+        core, extra = self._adds(d, "S3", "S", n_s - 2, min(2, n_s), lock, used)
+        ss = core + extra
+        self._dpkg = pkg
         return dts, edges, lbs, cbs, ss
 
     # ── Unit strengths ───────────────────────────────────────────────────────
@@ -1878,7 +1972,7 @@ class GameSim:
         self._adv = {"qb": qb, "pressured": False}
         pers = self._personnel()
         wrs, tes, rb, fbp = self._formation(pers)
-        dts, edges, lbs, cbs, ss = self._defense_set(len(wrs))
+        dts, edges, lbs, cbs, ss = self._defense_set(pers)
         self._snap_units([qb] + off.ol + wrs + tes + [rb, fbp], dts + edges + lbs + cbs + ss,
                          self._off_slots(off, wrs, tes), self._def_slots(dts, edges, lbs, cbs, ss))
         to_goal = 100 - self.yl
@@ -1949,7 +2043,7 @@ class GameSim:
         if call.get("rpo") or call.get("rpo_bad"):
             self.ts(off, "rpo_pass")
         slot_of = self._slot_map(pers, wrs, tes, rb, fbp)
-        route_of = {p.id: play["routes"].get(slot, "block") for slot, p in slot_of.items()}
+        route_of = {p.id: pb.route_for(play, slot) for slot, p in slot_of.items()}
 
         # The defensive call
         dc = self._def_call(len(cbs))
@@ -1983,9 +2077,9 @@ class GameSim:
         keep_in = []
         if rb and random.random() < (0.22 if not blitz else 0.45):
             keep_in.append(rb)
-        if tes and pers in ("12", "22") and random.random() < 0.35:
+        if tes and pers in ("12", "22", "13", "23") and random.random() < 0.35:
             keep_in.append(tes[-1])
-        for slot in ("RB", "FB", "TE", "TE2"):
+        for slot in ("RB", "FB", "TE", "TE2", "TE3"):
             p = slot_of.get(slot)
             if p is not None and route_of.get(p.id) == "block" and p not in keep_in:
                 keep_in.append(p)
@@ -2336,7 +2430,8 @@ class GameSim:
                 pr *= 0.6
             out.append((w, roles[i], pr))
         for i, t in enumerate(tes):
-            pr = (0.94 if i == 0 else 0.40) * (0.55 + 0.45 * t.rating_at("TE") / 130.0) * busy(t)
+            pr = (0.94 if i == 0 else 0.40 if i == 1 else 0.18) * (0.55 + 0.45 * t.rating_at("TE") / 130.0) \
+                * busy(t)
             if ptype == "deep":
                 pr *= 0.55
             out.append((t, "TE1" if i == 0 else "TE2", pr))
@@ -2350,7 +2445,14 @@ class GameSim:
                 pr *= 0.08
             out.append((rb, "RB", pr))
         if fbp:
-            out.append((fbp, "FB", 0.15 if ptype in ("short", "screen") else 0.03))
+            if getattr(self, "_pers", None) == "20":
+                # a second running back: a real outlet, less than the first
+                pr = 0.9 * (0.45 + 0.55 * fbp.a("catching") / 65.0) * busy(fbp)
+                pr *= 2.0 if ptype == "screen" else 0.35 if ptype == "medium" else 0.08 \
+                    if ptype in ("deep", "hail") else 1.0
+                out.append((fbp, "FB", pr))
+            else:
+                out.append((fbp, "FB", 0.15 if ptype in ("short", "screen") else 0.03))
         return out
 
     def _coverage_map(self, cands, cbs, ss, lbs, zone):
@@ -2704,7 +2806,7 @@ class GameSim:
         qb = off.qb
         pers = self._personnel()
         wrs, tes, rb, fbp = self._formation(pers)
-        dts, edges, lbs, cbs, ss = self._defense_set(len(wrs))
+        dts, edges, lbs, cbs, ss = self._defense_set(pers)
         self._snap_units([qb] + off.ol + wrs + tes + [rb, fbp], dts + edges + lbs + cbs + ss,
                          self._off_slots(off, wrs, tes), self._def_slots(dts, edges, lbs, cbs, ss))
         self.ts(off, "plays")

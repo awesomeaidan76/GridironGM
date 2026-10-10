@@ -53,8 +53,11 @@ The owner set the order of this work in October 2026.
   learning the new position, with conditioning toward its build), CPU conversions with news, a
   second-position training focus, a Staff Position Report, coach trust in conversions, a mild morale
   effect that depends on personality, CPU two-way use of multi-role stars.
-- 🔜 **Package slots** with their own depth lists (third-down back, power back, slot receiver,
-  nickel corner, sub linebacker, pass-rush ends and tackles), then **game-day inactives** (48 of 53).
+- ✅ **Package slots** with their own depth lists (third-down back, power back, slot receivers,
+  jumbo tight end, pass-rush ends and tackles, sub linebackers, nickel and dime backs, third safety),
+  rated by their role formula; 13, 20 and 23 personnel; defensive packages matched to the offense's
+  personnel (base, nickel, big nickel, dime, quarter, goal line).
+- 🔜 **Game-day inactives** (48 of 53).
 - 💡 The rest of the depth chart GUI ideas: a game-day preview of who takes the field in each
   personnel group after injuries and rotation; depth warnings fed into the Inbox; "compare at
   slot" for two players; a staff recommendation with its reason, and delegating the depth chart

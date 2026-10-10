@@ -16,7 +16,8 @@ import os
 import random
 
 # ── Formations ────────────────────────────────────────────────────────────────
-# Skill slots: X (split end), Z (flanker), SL / SL2 (slots), TE / TE2, RB, FB.
+# Skill slots: X (split end), Z (flanker), SL / SL2 (slots), TE / TE2 / TE3, RB, FB
+# (in 20 personnel the FB spot is a second running back).
 # Linemen and the QB are added automatically.
 
 OL = {"LT": (-4.4, -0.6), "LG": (-2.2, -0.5), "C": (0.0, -0.4), "RG": (2.2, -0.5), "RT": (4.4, -0.6)}
@@ -70,11 +71,38 @@ FORMATIONS = {
                                                            "Z": (20, -0.5), "RB": (0, -4.5)}},
     "Gun Quads":        {"pers": "10", "qb": -5, "slots": {"X": (-22, -0.5), "SL": (8, -1.2), "SL2": (13, -1.2),
                                                            "Z": (21, -1.2), "RB": (17, -0.5)}},
+    # 13 personnel: three tight ends
+    "Singleback Jumbo": {"pers": "13", "qb": -1, "slots": {"X": (-21, -0.5), "TE": (-6.6, -0.6), "TE2": (6.6, -0.6),
+                                                           "TE3": (8.2, -1.6), "RB": (0, -7)}},
+    "Gun Trey":         {"pers": "13", "qb": -5, "slots": {"X": (-22, -0.5), "TE": (6.6, -0.6), "TE2": (9.0, -1.4),
+                                                           "TE3": (11.5, -1.4), "RB": (-1.5, -5.2)}},
+    # 20 personnel: two running backs, no tight end
+    "Gun Split Backs":  {"pers": "20", "qb": -5, "slots": {"X": (-22, -0.5), "SL": (-12, -1.2), "Z": (21, -1.2),
+                                                           "RB": (-2.2, -5.2), "FB": (2.2, -5.2)}},
+    "Pistol Pony":      {"pers": "20", "qb": -4, "slots": {"X": (-22, -0.5), "SL": (11, -1.2), "Z": (21, -1.2),
+                                                           "RB": (0, -7), "FB": (-2.6, -4.6)}},
+    # 23 personnel: the goal-line jumbo package
+    "Goal Line":        {"pers": "23", "qb": -1, "slots": {"TE": (-6.6, -0.6), "TE2": (6.6, -0.6), "TE3": (8.2, -1.6),
+                                                           "FB": (0, -4.2), "RB": (0, -6.5)}},
 }
 
 PERSONNEL_SLOTS = {"11": ["X", "Z", "SL", "TE", "RB"], "12": ["X", "Z", "TE", "TE2", "RB"],
                    "21": ["X", "Z", "TE", "FB", "RB"], "22": ["X", "TE", "TE2", "FB", "RB"],
-                   "10": ["X", "Z", "SL", "SL2", "RB"]}
+                   "10": ["X", "Z", "SL", "SL2", "RB"], "13": ["X", "TE", "TE2", "TE3", "RB"],
+                   "20": ["X", "Z", "SL", "FB", "RB"], "23": ["TE", "TE2", "TE3", "FB", "RB"]}
+# A slot a play gives no route takes the route of the first of these it does have
+ROUTE_ALIAS = {"TE3": ("SL", "Z"), "SL2": (), "TE2": ()}
+
+
+def route_for(play, slot):
+    """The route a formation slot runs in a pass play ('block' if none)."""
+    routes = play["routes"]
+    if slot in routes:
+        return routes[slot]
+    for alt in ROUTE_ALIAS.get(slot, ()):
+        if alt in routes:
+            return routes[alt]
+    return "block"
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 # Waypoints relative to the receiver's alignment. dx > 0 means *toward the
@@ -290,12 +318,16 @@ RUN_FORMS = {"11": ["Gun Doubles", "Singleback Trips", "Pistol Doubles", "Gun Tr
                     "Gun Wing"],
              "12": ["Singleback Ace", "Singleback Wing", "Pistol Ace", "Pistol Wing"],
              "21": ["I-Form Pro", "Strong I", "Pro Set", "Wing-T"],
-             "22": ["I-Form Heavy"], "10": ["Gun Spread", "Flexbone"]}
+             "22": ["I-Form Heavy"], "10": ["Gun Spread", "Flexbone"],
+             "13": ["Singleback Jumbo", "Gun Trey"], "20": ["Gun Split Backs", "Pistol Pony"],
+             "23": ["Goal Line"]}
 PASS_FORMS = {"11": ["Gun Doubles", "Gun Trips Right", "Gun Bunch Right", "Singleback Trips", "Pistol Doubles",
                      "Gun Twins", "Gun Wing", "Singleback Bunch"],
               "12": ["Singleback Ace", "Gun Y-Trips", "Singleback Wing", "Pistol Ace", "Pistol Wing"],
               "21": ["I-Form Pro", "Strong I", "Pro Set", "Wing-T"],
-              "22": ["I-Form Heavy"], "10": ["Gun Spread", "Gun Trips Empty", "Gun Quads", "Flexbone"]}
+              "22": ["I-Form Heavy"], "10": ["Gun Spread", "Gun Trips Empty", "Gun Quads", "Flexbone"],
+              "13": ["Singleback Jumbo", "Gun Trey"], "20": ["Gun Split Backs", "Pistol Pony"],
+              "23": ["Goal Line"]}
 
 # Systems: how much each scheme likes each pass concept (default 1.0)
 SCHEME_CONCEPTS = {
@@ -326,7 +358,7 @@ SCHEME_FORMS = {
     "Air Raid": {"Gun Doubles": 2.0, "Gun Trips Right": 2.0, "Gun Spread": 2.0, "Gun Twins": 1.5},
     "Run and Shoot": {"Gun Spread": 4.0, "Gun Twins": 2.0, "Gun Quads": 1.5},
     "Spread Option": {"Gun Doubles": 1.5, "Gun Trips Right": 1.5, "Gun Spread": 1.5, "Pistol Doubles": 1.5},
-    "Pistol": {"Pistol Doubles": 4.0, "Pistol Ace": 4.0, "Pistol Wing": 3.0},
+    "Pistol": {"Pistol Doubles": 4.0, "Pistol Ace": 4.0, "Pistol Wing": 3.0, "Pistol Pony": 3.0},
     "Power Run": {"I-Form Pro": 2.0, "Strong I": 2.0, "I-Form Heavy": 2.0, "Pro Set": 1.5},
     "Pro Style": {"I-Form Pro": 1.5, "Singleback Ace": 1.5, "Pro Set": 1.5, "Singleback Trips": 1.3},
     "Zone Run": {"Singleback Ace": 2.0, "Singleback Wing": 2.0, "Gun Wing": 1.5, "Pistol Wing": 1.5},

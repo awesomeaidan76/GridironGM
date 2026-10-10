@@ -425,16 +425,28 @@ class Player:
         return max(self._ca, position_fit.learned_ca(self, self.position, conditioned=True))
 
     def ovr_at(self, position):
-        return ovr_from_ca(self.rating_at(position), position)
+        return ovr_from_ca(self.rating_at(position), position_fit.base_of(position))
+
+    def _package_shift(self, slot):
+        """A package's potential follows his base position's, moved by how his role rating compares today."""
+        base = position_fit.base_of(slot)
+        return self.ovr_at(slot) - self.ovr_at(base), base
 
     def pot_at(self, position):
         """Projected peak rating at a slot, once he has learned it."""
+        if position in position_fit.PACKAGE_SLOTS:
+            d, base = self._package_shift(position)
+            return max(self.ovr_at(position), min(99, self.pot_at(base) + d))
         if position == self.position:
             return self.pot
         return ovr_from_ca(position_fit.slot_pot_ca(self, position), position)
 
     def pot_range_at(self, position, scouting=10):
         """The scouts' potential range at a slot (what he could be there once he has learned it)."""
+        if position in position_fit.PACKAGE_SLOTS:
+            d, base = self._package_shift(position)
+            now = self.ovr_at(position)
+            return tuple(max(now, min(99, v + d)) for v in self.pot_range_at(base, scouting))
         if position == self.position:
             return self.scouted_pot_range(scouting)
         base = position_fit.learned_ca(self, position)
