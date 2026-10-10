@@ -1202,6 +1202,18 @@ class NewGameDialog(QDialog):
         regen = QPushButton("Generate New League")
         regen.clicked.connect(self.generate)
         form.addWidget(regen)
+        form.addWidget(QLabel("Difficulty:"))
+        import gameday
+        self.difficulty = QComboBox()
+        levels = [lv for lv in gameday.LEVELS if lv[0] >= 0.5]
+        for v, name in levels:
+            self.difficulty.addItem(name, v)
+        cur = settings.get("cpu_intelligence", gameday.DEFAULT_IQ)
+        self.difficulty.setCurrentIndex(min(range(len(levels)), key=lambda i: abs(levels[i][0] - cur)))
+        self.difficulty.setToolTip("How sharp CPU coaching staffs are: how well they scout you, game-plan "
+                                   "and adjust during games. Player ratings are never changed. Pro is "
+                                   "realistic; you can fine-tune it later in Settings > AI.")
+        form.addWidget(self.difficulty)
         root.addLayout(form)
         era_note = QLabel("Every league begins from a different, era-neutral landscape. From there "
                           "the style of play evolves on its own: draft classes, coaching trees, "
@@ -1301,6 +1313,9 @@ class NewGameDialog(QDialog):
         lg = self.league
         lg.name = self.name_edit.text().strip() or lg.name
         lg.user_abbr = self.selected
+        own = lg.custom_settings if isinstance(lg.custom_settings, dict) else {}
+        own["cpu_intelligence"] = float(self.difficulty.currentData())
+        lg.custom_settings = own
         from season import default_tactics
         lg.user_team.tactics = default_tactics()
         lg.add_news("League", f"You have taken charge of the {lg.user_team.full_name}. "

@@ -28,6 +28,7 @@ import grades
 import situations as sit_lib
 import position_fit as fit
 import packages
+import gameday
 from coach import sit_tendency, SCHEME_EXECUTION
 
 QUARTER = 900
@@ -245,7 +246,8 @@ class Side:
 
 class GameSim:
     def __init__(self, home, away, week=0, season=0, playoff=None,
-                 neutral=False, keep_pbp=True, rules=None, diagrams=False):
+                 neutral=False, keep_pbp=True, rules=None, diagrams=False,
+                 user_abbr=None, scouting=None, iq=None):
         self.res = GameResult(home.abbr, away.abbr, week, season, playoff)
         self._adj = {}                  # pid -> {attr: change} at the slot he is playing (position_fit)
         self._adj_cache = {}            # (pid, slot) -> that dict
@@ -254,6 +256,10 @@ class GameSim:
         self._bust = set()              # players who blew their assignment this snap
         self.home = Side(home, True, self)
         self.away = Side(away, False, self)
+        # How sharp each staff is today: the user's own staff always works at the
+        # realistic baseline; the league's CPU intelligence setting sharpens CPU staffs
+        for side in (self.home, self.away):
+            side.fx = gameday.effects(self._iq_for(side.abbr, user_abbr, iq))
         self.playoff = playoff
         self.neutral = neutral
         self.keep_pbp = keep_pbp
@@ -296,15 +302,24 @@ class GameSim:
         self.mom_sens = {}              # pid -> signed sensitivity to momentum
         self.mom_pts = 0.0
 
-        # Weekly game plans: each defensive coordinator scouts the opponent
+        # Weekly game plans: each staff studies the opponent's film (and its own)
         self.gstats = {home.abbr: Counter(), away.abbr: Counter()}
         self._spy_on = False
         self._ocall = None
+        scouting = scouting or {}
         for side, opp in ((self.home, self.away), (self.away, self.home)):
-            side.dgp = dfn_lib.scout(side.team, opp.team, opp.plan, calling=staff_mod.def_calling(side.team))
+            n = side.fx["film"]
+            side.film_opp = gameday.film(scouting.get(opp.abbr) or [], opp.abbr, n)
+            own = gameday.film(scouting.get(side.abbr) or [], side.abbr, n)
+            side.self_read = gameday.read_offense(own, side.plan) if own["games"] else None
             side.dadj = {}
             side.oshift = 0.0
+            side.blitz_adj = 0.0
+        for side, opp in ((self.home, self.away), (self.away, self.home)):
+            self._game_plan(side, opp)
+            self._build_prefs(side)
         self.res.gameplans = {self.home.abbr: self.home.dgp, self.away.abbr: self.away.dgp}
+        self.res.off_notes = {self.home.abbr: self.home.ogp["notes"], self.away.abbr: self.away.ogp["notes"]}
         self._spike_next = False
         for side, opp in ((self.home, self.away), (self.away, self.home)):
             u, v = side.team.unit_ratings(), opp.team.unit_ratings()
@@ -332,6 +347,59 @@ class GameSim:
         self.game_over = False
 
     # ── Setup ────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _iq_for(abbr, user_abbr, iq):
+        if abbr == user_abbr:
+            return gameday.DEFAULT_IQ
+        if isinstance(iq, dict):
+            iq = iq.get(abbr)
+        if iq is None:
+            iq = settings.get("cpu_intelligence", gameday.DEFAULT_IQ)
+        return iq
+
+    def _sharp(self, side, rating):
+        return gameday.sharpen(rating, side.fx)
+
+    def _game_plan(self, side, opp, defense=True, offense=True):
+        """This staff's plan for the opponent: how to defend it and how to attack it."""
+        fx = side.fx
+        adapt = self._sharp(side, side.team.coach.r("adaptability"))
+        if defense:
+            dcall = self._sharp(side, staff_mod.def_calling(side.team))
+            err = max(0.0, (20.0 - dcall) / 20.0) * 0.6 * fx["read"]
+            rd = gameday.read_offense(side.film_opp, opp.plan, err)
+            seen = dict(opp.plan)
+            seen["pass_rate"] = rd["pass_rate"]
+            side.dgp = dfn_lib.scout(side.team, opp.team, seen, calling=dcall, read_mult=fx["read"])
+            side.dgp["read"] = rd
+            side.dq = fx["plan"] * (dcall / 20.0) * (0.5 + adapt / 20.0)
+        if offense:
+            ocall = self._sharp(side, staff_mod.off_calling(side.team))
+            side.ogp = gameday.offense_plan(side.team, opp.team, side.film_opp, ocall, adapt, fx, opp.plan)
+            side.lr = 1.2 * (ocall / 20.0) * (0.5 + adapt / 40.0) * fx["learn"]
+            side.dlr = 1.2 * (self._sharp(side, staff_mod.def_calling(side.team)) / 20.0) \
+                * (0.5 + adapt / 40.0) * fx["learn"]
+
+    def _build_prefs(self, side):
+        """
+        The call sheet weights for this series: the user's Featured / Removed plays, the
+        weekly plan's featured concepts, and what has worked so far today.
+        """
+        prefs = dict(getattr(side.team, "play_prefs", None) or {})
+        for name, m in side.ogp["concepts"].items():
+            prefs[name] = prefs.get(name, 1.0) * m
+        ts = self.res.team_stats[side.abbr]
+        for name, m in gameday.learned(ts, "oc", side.ogp["concepts"], side.lr).items():
+            prefs[name] = prefs.get(name, 1.0) * m
+        for name, m in gameday.learned(ts, "oc", pb.RUN_CONCEPT_INFO, side.lr).items():
+            prefs["run:" + name] = prefs.get("run:" + name, 1.0) * m
+        for name, m in gameday.learned(ts, "dc", dfn_lib.COVERAGES, side.dlr, sign=-1.0).items():
+            prefs["def:" + name] = prefs.get("def:" + name, 1.0) * m
+        lp = gameday.learned(ts, "dc", ("Pressure (5+ rushers)", "Four-man rush"), side.dlr, sign=-1.0)
+        if len(lp) == 2:
+            side.blitz_adj = _clip(math.log(lp["Pressure (5+ rushers)"] / lp["Four-man rush"]) * 0.3, -0.08, 0.08)
+        side.prefs = prefs
 
     def _build_form(self, side, home_edge):
         """
@@ -591,11 +659,20 @@ class GameSim:
         """Coordinators adjust to what is working (halftime adjustments are the big ones)."""
         for side in (self.home, self.away):
             opp = self.other(side)
-            calling = staff_mod.def_calling(side.team)
+            calling = self._sharp(side, staff_mod.def_calling(side.team))
             if not halftime:
                 calling *= 0.5
             side.dadj, note = dfn_lib.adjust(side.dadj, self.gstats[opp.abbr], calling,
-                                             side.team.coach.r("adaptability"))
+                                             self._sharp(side, side.team.coach.r("adaptability")))
+            # Update the read of their tendencies with what they have shown today
+            today = self.res.team_stats[opp.abbr]
+            seen = Counter((side.film_opp or {}).get("own", {}))
+            w = 1.0 + side.fx["learn"]
+            for k, v in today.items():
+                if k.startswith("sit|"):
+                    seen[k] += v * w
+            err = max(0.0, (20.0 - calling) / 20.0) * 0.3 * side.fx["read"]
+            side.dgp["read"] = gameday.read_offense({"own": seen}, opp.plan, err)
             if note and halftime:
                 self.log(f"Halftime adjustment: the {side.team.name} "
                          f"defense {note}", "note")
@@ -603,7 +680,7 @@ class GameSim:
             g = self.gstats[side.abbr]
             if g["run_n"] >= 6 and g["pass_n"] >= 8:
                 gap = g["pass_epa"] / g["pass_n"] - g["run_epa"] / g["run_n"]
-                q = staff_mod.off_calling(side.team) / 20.0 * (1.0 if halftime else 0.5)
+                q = self._sharp(side, staff_mod.off_calling(side.team)) / 20.0 * (1.0 if halftime else 0.5)
                 side.oshift = _clip(side.oshift + _clip(gap, -0.3, 0.3) * 0.15 * q, -0.08, 0.08)
 
     def _exert(self, p, yards=0):
@@ -886,6 +963,8 @@ class GameSim:
                 self.game_over = True
             self.ot_possessions.add(side.abbr)
         side.rb1_streak = 0
+        self._build_prefs(side)
+        self._build_prefs(self.dfn)
         self.drive = {"team": side.abbr, "start": yl, "plays": 0, "yards": 0,
                       "clock": self.clock, "quarter": self.quarter, "result": "",
                       "rz": False}
@@ -1340,16 +1419,14 @@ class GameSim:
     def _after_td(self, side):
         """Extra point or two-point try, then kickoff."""
         self.ts(side, "tds")
-        go_two = self._go_for_two(side)
+        prob = self._two_prob(side)
+        go_two = self._go_for_two(side, prob)
         if go_two:
-            off_q = (side.team.unit_ratings()["OFF"])
-            def_q = (self.other(side).team.unit_ratings()["DEF"])
-            prob = _clip(0.47 + (off_q - def_q) / 300.0, 0.30, 0.65)
             self.ts(side, "two_att")
             prefs = getattr(side.team, "play_prefs", None) or {}
             if random.random() < 0.05 * side.plan["trick"] * prefs.get("st:Swinging Gate", 1.0):
                 # Swinging gate: the line splits out wide; a well-coached defense follows it
-                read = random.random() < 0.35 + 0.4 * self.other(side).team.coach.r("game_management") / 20.0
+                read = random.random() < 0.35 + 0.4 * self._gm(self.other(side)) / 20.0
                 prob += -0.08 if read else 0.14
                 self.log(f"{side.abbr} line up in a swinging gate for the two-point try", "note")
             if random.random() < prob:
@@ -1382,7 +1459,12 @@ class GameSim:
         if not self.game_over:
             self.kickoff(side)
 
-    def _go_for_two(self, side):
+    def _two_prob(self, side):
+        off_q = side.team.unit_ratings()["OFF"]
+        def_q = self.other(side).team.unit_ratings()["DEF"]
+        return _clip(0.47 + (off_q - def_q) / 300.0, 0.30, 0.65)
+
+    def _go_for_two(self, side, prob=0.48):
         diff = side.score - self.other(side).score     # after the TD
         if self.quarter >= 5:
             return False
@@ -1391,8 +1473,11 @@ class GameSim:
         secs = self._secs_left()
         if self.quarter <= 2:
             secs = max(secs, 2400.0)
+        # the staff's estimate of its chance, blurred for a poor game manager
+        est = _clip(prob + random.gauss(0, (20 - self._gm(side)) * 0.002), 0.2, 0.75)
         return sit_lib.two_point(diff, secs, xp, side.plan["aggression"] * self.go_mult, self._gm(side),
-                                 edge=self._edge_for(side))
+                                 two_prob=est, edge=self._edge_for(side),
+                                 caution=sit_lib.TWO_CAUTION * gameday.caution(side.fx))
 
     # ── Situational decisions ────────────────────────────────────────────────
 
@@ -1436,11 +1521,13 @@ class GameSim:
         p = self._punter(self.poss)
         st = {"diff": diff, "secs": self._secs_left() if self.quarter <= 4 else 1800.0, "yl": self.yl,
               "togo": self.togo, "fg_prob": fg_p, "fg_range_ok": in_range and fg_p > 0.05,
-              "punt_net": 39 + (p.a("punt_power") - 70) * 0.12, "edge": self._edge_for(self.poss),
+              "punt_net": 39 + (p.a("punt_power") - 70) * 0.12 + self.wx["punt"] * 0.8,
+              "edge": self._edge_for(self.poss),
               "off_edge": self.poss.conv_edge}
         if self.quarter <= 2:
             st["secs"] = max(st["secs"], 1800.0)        # first-half calls are about points, not the clock
-        return sit_lib.choose_fourth(st, _clip(aggr, 0.0, 1.5), self._gm(self.poss))
+        return sit_lib.choose_fourth(st, _clip(aggr, 0.0, 1.5), self._gm(self.poss),
+                                     caution=sit_lib.FOURTH_CAUTION * gameday.caution(self.poss.fx))
 
     def _secs_left(self):
         if self.quarter > 4:
@@ -1451,8 +1538,20 @@ class GameSim:
         """Pre-game strength edge (points over a full game) from this side's point of view."""
         return self.pre_edge if side is self.home else -self.pre_edge
 
+    def _tired_front(self):
+        """Extra chance to go no-huddle: a sharp staff keeps a gassed defensive front on the field."""
+        if self.urgency(self.poss) != "normal":
+            return 0.0
+        lu = self.dfn.lu
+        front = lu.get("DT", [])[:2] + lu.get("EDGE", [])[:2]
+        if not front:
+            return 0.0
+        en = sum(self.energy.get(p.id, 100.0) for p in front) / len(front)
+        return _clip((88.0 - en) / 100.0, 0.0, 0.08) * self.poss.ogp["g"] * 2.0
+
     def _gm(self, side):
-        return side.team.coach.r("game_management")
+        """Game management as this staff decides with it (the CPU difficulty dial sharpens it)."""
+        return self._sharp(side, side.team.coach.r("game_management"))
 
     def _pass_probability(self):
         plan = self.poss.plan
@@ -1498,6 +1597,13 @@ class GameSim:
                 lean *= 1.2 - 0.45 * plan["aggression"]
             p -= lean
         p += self.wx["pass_shift"] + self.pass_shift + self.poss.oshift
+        if mode == "normal":
+            p += self.poss.ogp["pass_shift"]
+            # Self-scouting: a staff that knows the defense reads its tendencies breaks them
+            own = self.poss.self_read
+            if own is not None and self.dfn.dgp.get("read") is not None:
+                b = self.sit_bucket(d, t, self.yl)
+                p -= 0.5 * self.poss.ogp["g"] * gameday.sit_lean(own, b)
         return _clip(p, 0.05, 0.97)
 
     # ── A single snap ────────────────────────────────────────────────────────
@@ -1511,10 +1617,10 @@ class GameSim:
         self.dcall = None
         self._last_tackler = None
         self._rush_winner = None
-        self._run_side = random.choice([-1, 1])
+        self._run_side = 1 if random.random() < self.poss.ogp["run_right"] else -1
         mid_drive = self.drive is not None and self.drive["plays"] >= 1
         self.no_huddle = mid_drive and (self.urgency(self.poss) == "hurry" or
-                                        random.random() < self.poss.plan["tempo"] * 0.30)
+                                        random.random() < self.poss.plan["tempo"] * 0.30 + self._tired_front())
         if self.mom:
             self.mom *= 0.92
             self.mom_pts = self.mom * 1.6 * self.mom_scale
@@ -2091,9 +2197,14 @@ class GameSim:
         dp = dict(de.plan)
         for k in ("blitz", "zone", "two_high"):
             dp[k] = _clip(dp[k] + de.dgp.get(k, 0.0) + de.dadj.get(k, 0.0), 0.0, 1.0)
-        call = dfn_lib.choose_call(dp, sit, scheme=de.team.coach.def_scheme,
-                                   prefs=getattr(de.team, "play_prefs", None))
-        call["box"] = _clip(de.dgp.get("box", 0.0) + de.dadj.get("box", 0.0), -1.0, 1.0)
+        dp["blitz"] = _clip(dp["blitz"] + de.blitz_adj, 0.0, 1.0)
+        call = dfn_lib.choose_call(dp, sit, scheme=de.team.coach.def_scheme, prefs=de.prefs)
+        box = de.dgp.get("box", 0.0) + de.dadj.get("box", 0.0)
+        rd = de.dgp.get("read")
+        if rd is not None and not sit["hurry"]:
+            # They throw here more (or less) than usual: lighten (or load) the box
+            box -= gameday.sit_lean(rd, self.sit_bucket(self.down, self.togo, self.yl)) * 2.0 * de.dq
+        call["box"] = _clip(box, -1.0, 1.0)
         self._spy_on = bool(de.dgp.get("spy")) and not call["blitz"] and random.random() < 0.75
         self.dcall = call
         return call
@@ -2134,9 +2245,9 @@ class GameSim:
         if hail:
             ptype = "hail"
         else:
-            deep = 0.125 + 0.10 * plan["deep"] - 0.06 * dplan["two_high"]
+            deep = 0.125 + 0.10 * plan["deep"] - 0.06 * dplan["two_high"] + off.ogp["deep_shift"]
             deep += (e(qb, "throw_power") - 75) / 600.0
-            screen = 0.025 + 0.09 * plan["screen"]
+            screen = max(0.005, 0.025 + 0.09 * plan["screen"] + off.ogp["screen_shift"])
             medium = 0.28 + 0.05 * plan["deep"]
             oc = off.team.coach
             if self.down == 1 and self.togo >= 10 and 30 <= self.yl <= 65:
@@ -2184,8 +2295,7 @@ class GameSim:
                                         scheme=off.team.coach.off_scheme)
         play = pb.choose_pass_play(off.team.coach.off_scheme, ptype, pa=pa,
                                    trick=call.get("trick") == "flea",
-                                   prefs=getattr(off.team, "play_prefs", None),
-                                   rpo=bool(call.get("rpo")), form=form_name)
+                                   prefs=off.prefs, rpo=bool(call.get("rpo")), form=form_name)
         self._ocall = play["name"]
         self._track_form(off, pers, form_name)
         if pa:
@@ -2623,8 +2733,9 @@ class GameSim:
                 tpg = ss.get("targets", 0) / ss["gp"]
                 f /= 1.0 + max(0.0, tpg - 8.5) * 0.26     # defenses scheme against a volume star
             return f
+        tw = self.poss.ogp["targets"]
         for i, w in enumerate(wrs):
-            pr = prior_wr[i] * (0.55 + 0.45 * w.rating_at("WR") / 130.0) * busy(w)
+            pr = prior_wr[i] * (0.55 + 0.45 * w.rating_at("WR") / 130.0) * busy(w) * tw.get(w.id, 1.0)
             if ptype == "screen":
                 pr *= 0.6
             out.append((w, roles[i], pr))
@@ -3022,7 +3133,7 @@ class GameSim:
             if (k in self.OPTION and k not in ("triple option", "midline")) or k in self.QB_DESIGNED:
                 add *= max(0.25, mob)
             w[k] = max(0.02 if k in w else 0.0, w.get(k, 0.0) + add)
-        prefs = getattr(self.poss.team, "play_prefs", None) or {}
+        prefs = self.poss.prefs
         if prefs:
             for k in list(w):
                 w[k] *= prefs.get("run:" + k, 1.0)
@@ -3824,7 +3935,26 @@ class GameSim:
         side = self.home if player.team == self.home.abbr else self.away
         self.res.injuries.append((player.id, player.name, side.abbr, inj["name"], inj["weeks"]))
         self.log(f"INJURY: {player.name} ({player.position}, {side.abbr}) — {inj['name']}", "note")
+        qb_before = side.lu["QB"][0] if side.lu["QB"] else None
         side.refresh_lineup()
+        self._replan(side, player, qb_before)
+
+    def _replan(self, side, player, qb_before):
+        """After an injury both staffs adjust: the hurt side's plan, and the opponent's plan for it."""
+        opp = self.other(side)
+        pos = player.position
+        if pos in ("QB", "RB", "WR", "TE", "OT", "IOL"):
+            side.plan = side.team.gameplan()
+            read = opp.dgp.get("read")
+            self._game_plan(opp, side, offense=False)      # they re-scout the offense
+            if read is not None:
+                opp.dgp["read"] = read                     # what they have seen today still counts
+            self._game_plan(side, opp, defense=False)
+            qb = side.lu["QB"][0] if side.lu["QB"] else None
+            if qb is not None and qb is not qb_before:
+                self.log(f"The {opp.team.name} defense adjusts for backup QB {qb.name}", "note")
+        elif pos in ("CB", "S", "LB", "EDGE", "DT"):
+            self._game_plan(opp, side, defense=False)       # attack the replacement
 
     # ── Finish ───────────────────────────────────────────────────────────────
 
@@ -3856,5 +3986,11 @@ class GameSim:
 
 
 def simulate_game(home, away, week=0, season=0, playoff=None, neutral=False,
-                  keep_pbp=True, rules=None, diagrams=False):
-    return GameSim(home, away, week, season, playoff, neutral, keep_pbp, rules, diagrams).play()
+                  keep_pbp=True, rules=None, diagrams=False, user_abbr=None, scouting=None, iq=None):
+    """
+    user_abbr: the user's club (its staff works at the realistic baseline);
+    scouting: {abbr: that club's games so far this season} (the film both staffs study); iq: CPU intelligence
+    (a number, or {abbr: number}; default the league setting).
+    """
+    return GameSim(home, away, week, season, playoff, neutral, keep_pbp, rules, diagrams,
+                   user_abbr=user_abbr, scouting=scouting, iq=iq).play()

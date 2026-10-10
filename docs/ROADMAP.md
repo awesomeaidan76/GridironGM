@@ -66,7 +66,13 @@ The owner set the order of this work in October 2026.
   touchback at the 30 then 35, declared onsides; adopted when returns die out), named fakes (up-back,
   punter and holder runs and passes, the swinging gate), return to the field, throwback, hold-up
   return, coffin-corner punts, quick kicks, the fair catch kick and the safety free kick.
-- 🔜 Smarter CPU depth charts and packages (with difficulty levels).
+- ✅ **CPU AI, game day**: film study (situational tendencies, coverage and pressure mix), weekly offensive
+  and defensive game plans (coverage-beater concepts, matchups, run side, tendency reads and breaks),
+  series and halftime adjustments, injury re-plans, tempo against a tired front, and the per-league
+  difficulty setting (Rookie / Pro / All-Pro / Hall of Fame) that sharpens CPU staffs' decisions only.
+- 🔜 **CPU AI, front office**: trade valuation that can't be fleeced, rating fog for CPU evaluations,
+  re-signing and cap planning, CPU development choices, season objectives; the difficulty dial reaches it.
+- 🔜 **CPU AI, substitutions**: rotation identity per coach, resting starters, load and injury management.
 - 🔜 **Game-day inactives** (48 of 53).
 - 💡 The rest of the depth chart GUI ideas: a game-day preview of who takes the field in each
   personnel group after injuries and rotation; depth warnings fed into the Inbox; "compare at

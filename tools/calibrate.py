@@ -42,10 +42,13 @@ def run(games=400, seed=1, quiet=False):
     res = []
     t0 = time.time()
     home_w = 0; ties = 0
+    film = {t.abbr: [] for t in teams}           # each club's recent games, for the staffs' film study
     for i in range(games):
         h, a = random.sample(teams, 2)
-        r = simulate_game(h, a, keep_pbp=False)
+        r = simulate_game(h, a, keep_pbp=False, scouting={h.abbr: film[h.abbr], a.abbr: film[a.abbr]})
         res.append(r)
+        for ab in (h.abbr, a.abbr):
+            film[ab] = (film[ab] + [r])[-6:]
         for t in (h, a):
             for p in t.roster:
                 p.injury = None
