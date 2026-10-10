@@ -57,6 +57,13 @@ The owner set the order of this work in October 2026.
   jumbo tight end, pass-rush ends and tackles, sub linebackers, nickel and dime backs, third safety),
   rated by their role formula; 13, 20 and 23 personnel; defensive packages matched to the offense's
   personnel (base, nickel, big nickel, dime, quarter, goal line).
+- ✅ **Playbook depth:** pre-snap motion (jet, orbit, across, shift) with a Pre-Snap Motion slider;
+  duo, split zone, pin and pull, crack toss, QB counter/power and wildcat runs; Spider 2 Y Banana,
+  Leak, Scissors, Hoss, Jailbreak Screen and Pop Pass; Palms, Cover 7/8/9, Cover 2 Invert and
+  three-high coverages, the Penny front, corner and edge zone blitzes, Amoeba, Double Mug and green
+  dogs; the Wide Zone and Three-High systems; custom coverages and motion in playbook JSON.
+- 🔜 **Special teams** depth and the dynamic kickoff (a competition-committee rule), then smarter
+  CPU depth charts and packages.
 - 🔜 **Game-day inactives** (48 of 53).
 - 💡 The rest of the depth chart GUI ideas: a game-day preview of who takes the field in each
   personnel group after injuries and rotation; depth warnings fed into the Inbox; "compare at

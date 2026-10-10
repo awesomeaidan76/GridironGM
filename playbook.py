@@ -146,6 +146,10 @@ ROUTES = {
     "arrow":     {"cls": "short",  "depth": 3,  "path": [(0, 0), (6, 3), (11, 4)]},
     "tunnel":    {"cls": "screen", "depth": -1, "path": [(0, 0), (-3, -1), (-6, 1)]},
     "slip":      {"cls": "screen", "depth": -1, "path": [(0, 0), (1, 1), (-2, -1), (-4, 0)]},
+    "banana":    {"cls": "medium", "depth": 12, "path": [(0, 0), (1, 4), (4, 9), (7, 12)]},
+    "leak":      {"cls": "deep",   "depth": 18, "path": [(0, 0), (-1, 1), (-6, 4), (-18, 16)]},
+    "pop":       {"cls": "short",  "depth": 8,  "path": [(0, 0), (0, 2), (0.5, 9)]},
+    "jailbreak": {"cls": "screen", "depth": -1, "path": [(0, 0), (0, 1.5), (-4, -1), (-8, 0)]},
     "block":     {"cls": "block",  "depth": 0,  "path": []},
 }
 
@@ -260,6 +264,20 @@ PASS_PLAYS = [
                                                           "TE": "block", "RB": "block"}},
     {"name": "TE Slip Screen", "cls": "screen", "routes": {"TE": "slip", "X": "go", "Z": "go", "SL": "drag",
                                                            "RB": "flat"}},
+    # ── Modern NFL concepts ──
+    {"name": "Spider 2 Y Banana", "cls": "medium", "pa": True,
+     "routes": {"TE": "banana", "FB": "flat", "RB": "flat", "X": "go", "Z": "post", "SL": "dig",
+                "TE2": "flat"}},
+    {"name": "Leak", "cls": "deep", "pa": True, "routes": {"X": "post", "Z": "dig", "TE": "leak", "SL": "go",
+                                                          "TE2": "block", "FB": "flat", "RB": "block"}},
+    {"name": "Scissors", "cls": "deep", "routes": {"X": "post", "SL": "corner", "Z": "post", "SL2": "corner",
+                                                   "TE": "corner", "TE2": "drag", "RB": "checkdown"}},
+    {"name": "Hoss", "cls": "short", "routes": {"X": "hitch", "SL": "seam", "Z": "hitch", "SL2": "seam",
+                                                "TE": "seam", "TE2": "hitch", "RB": "checkdown"}},
+    {"name": "Jailbreak Screen", "cls": "screen", "routes": {"Z": "jailbreak", "X": "block", "SL": "block",
+                                                              "TE": "block", "RB": "block"}},
+    {"name": "Pop Pass", "cls": "short", "rpo": True, "motion": {"slot": "SL", "kind": "jet"},
+     "routes": {"TE": "pop", "X": "go", "Z": "hitch", "SL": "flat", "RB": "block"}},
     # Specials
     {"name": "Flea Flicker", "cls": "deep", "pa": True, "trick": True,
      "routes": {"X": "post", "Z": "go", "TE": "block", "SL": "go", "TE2": "block"}},
@@ -292,6 +310,13 @@ RUN_PATHS = {
     "midline":      [(0, 0), (0.3, 2), (0.5, 6), (0, 12)],
     "speed option": [(0, 0), (4, 1), (7, 4), (8, 12)],
     "scramble":     [(0, 0), (-3, -2), (6, 2), (8, 10)],
+    "duo":          [(0, 0), (0.8, 2), (1.2, 6), (1, 12)],
+    "split zone":   [(0, 0), (1.5, 2), (1.5, 6), (0, 12)],
+    "pin and pull": [(0, 0), (4, 1.5), (8, 4), (10, 12)],
+    "qb counter":   [(0, 0), (-1.5, 0.5), (2.5, 3), (4, 11)],
+    "qb power":     [(0, 0), (1.5, 2), (3, 6), (3.5, 12)],
+    "crack toss":   [(0, 0), (6, 1), (12, 4), (15, 12)],
+    "wildcat":      [(0, 0), (1.5, 2.5), (2.5, 7), (2.5, 12)],
 }
 
 # Run concepts the engine can call (key = engine name)
@@ -311,6 +336,20 @@ RUN_CONCEPT_INFO = {
     "triple option": "Flexbone option: give to the dive back, keep, or pitch to the trailing back",
     "midline": "Option off the defensive tackle: give inside to the fullback or the QB keeps up the middle",
     "speed option": "QB attacks the edge and pitches to the back when the end commits",
+    "duo": "Downhill gap run with double teams on both sides of the ball and no pullers; the back reads the "
+           "middle linebacker. Best against two-high shells with a light box",
+    "split zone": "Inside zone with a tight end or fullback coming back across the formation to kick out the "
+                  "unblocked backside end",
+    "pin and pull": "Outside run: playside linemen block down (pin) while the others pull around them to lead "
+                    "the back to the edge",
+    "qb counter": "Designed quarterback run: the back fakes one way, two linemen pull and the QB follows them "
+                  "back the other way",
+    "qb power": "Designed quarterback power: the back becomes a lead blocker, giving the offense an extra hat "
+                "at the point of attack",
+    "crack toss": "A toss where the receivers block down on the linebacker and safety (crack) and a lineman "
+                  "pulls around for the corner",
+    "wildcat": "Direct snap to a running back with the QB split wide; he reads the end and keeps it or hands "
+               "off to the man in jet motion. An extra blocker, but no passing threat",
 }
 
 # Which formations each personnel group uses for runs and passes
@@ -351,7 +390,18 @@ SCHEME_CONCEPTS["Pro Style"].update({"Yankee": 1.8, "Mills": 1.6, "Hi-Lo": 1.6, 
 SCHEME_CONCEPTS["Air Coryell"].update({"Mills": 2.4, "Yankee": 2.0, "Sluggo": 1.6})
 SCHEME_CONCEPTS["Spread Option"].update({"Glance RPO": 2.4, "Bubble RPO": 2.4, "Stick RPO": 2.0,
                                          "Slant RPO": 1.8, "Climb": 1.8, "Spot": 1.6, "Tunnel Screen": 1.6})
-SCHEME_CONCEPTS["Power Run"].update({"Yankee": 2.0})
+SCHEME_CONCEPTS["Power Run"].update({"Yankee": 2.0, "Leak": 1.6, "Spider 2 Y Banana": 1.5})
+SCHEME_CONCEPTS["Wide Zone"] = {"PA Boot": 2.8, "PA Crossers": 2.6, "Leak": 2.4, "Spider 2 Y Banana": 2.2,
+                                "Yankee": 1.8, "Drive": 1.5, "Dagger": 1.3, "Jailbreak Screen": 1.4,
+                                "Shallow Cross": 1.4}
+SCHEME_CONCEPTS["Air Raid"]["Hoss"] = 2.2
+SCHEME_CONCEPTS["Run and Shoot"]["Hoss"] = 1.4
+SCHEME_CONCEPTS["West Coast"].update({"Spider 2 Y Banana": 2.4, "Jailbreak Screen": 1.3})
+SCHEME_CONCEPTS["Pro Style"].update({"Spider 2 Y Banana": 1.6, "Scissors": 1.6, "Leak": 1.3})
+SCHEME_CONCEPTS["Air Coryell"]["Scissors"] = 2.2
+SCHEME_CONCEPTS["Spread Option"].update({"Pop Pass": 2.0, "Jailbreak Screen": 1.4, "Hoss": 1.3})
+SCHEME_CONCEPTS["Pistol"].update({"Pop Pass": 1.6, "Leak": 1.4})
+SCHEME_CONCEPTS["Zone Run"].update({"Leak": 1.8, "Spider 2 Y Banana": 1.4})
 
 # Formation preferences by system (multiplies the base weight)
 SCHEME_FORMS = {
@@ -366,6 +416,8 @@ SCHEME_FORMS = {
     "Air Coryell": {"Singleback Ace": 1.5, "I-Form Pro": 1.5, "Gun Doubles": 1.3},
     "Wing-T": {"Wing-T": 12.0},
     "Flexbone": {"Flexbone": 12.0},
+    "Wide Zone": {"Singleback Wing": 1.8, "I-Form Pro": 1.6, "Pro Set": 1.4, "Gun Wing": 1.2,
+                  "Singleback Ace": 1.3},
 }
 
 # Run game by system: extra weight added to the engine's base run-concept mix
@@ -382,7 +434,78 @@ SCHEME_RUNS = {
     "Pro Style": {"lead": 0.3, "power": 0.2},
     "West Coast": {"outside zone": 0.2, "trap": 0.2},
     "Air Coryell": {"power": 0.2, "lead": 0.2},
+    "Wide Zone": {"outside zone": 1.2, "split zone": 0.5, "duo": 0.2, "toss": 0.15, "crack toss": 0.15,
+                  "inside zone": -0.2},
 }
+SCHEME_RUNS["Zone Run"].update({"split zone": 0.4, "duo": 0.15})
+SCHEME_RUNS["Power Run"].update({"duo": 0.5, "pin and pull": 0.15})
+SCHEME_RUNS["Spread Option"].update({"qb counter": 0.25, "qb power": 0.2, "crack toss": 0.1})
+SCHEME_RUNS["Pistol"].update({"qb counter": 0.15, "pin and pull": 0.1, "split zone": 0.2})
+SCHEME_RUNS["Pro Style"]["duo"] = 0.3
+SCHEME_RUNS["West Coast"].update({"pin and pull": 0.2, "split zone": 0.15})
+SCHEME_RUNS["Wing-T"]["crack toss"] = 0.2
+
+# ── Pre-snap motion ───────────────────────────────────────────────────────────
+# Kinds of motion: who usually goes in motion, how often each kind goes with runs
+# and passes, and the motion man's track (relative to his alignment, x toward the ball).
+MOTIONS = {
+    "jet":    {"run": 1.0, "pass": 0.55, "slots": ("SL", "Z", "X", "SL2"),
+               "path": [(0, 0), (-6, -0.8), (-14, -1.0)],
+               "desc": "A receiver sprints across the formation at full speed just before the snap: "
+                       "he can take a jet sweep, or the fake holds the backside defenders"},
+    "orbit":  {"run": 0.45, "pass": 0.65, "slots": ("SL", "Z", "SL2", "X"),
+               "path": [(0, 0), (-5, -2.5), (-9, -4.5), (-4, -5.5)],
+               "desc": "A receiver loops behind the quarterback: a decoy for misdirection, or the man "
+                       "for a screen back to the other side"},
+    "across": {"run": 0.8, "pass": 1.0, "slots": ("TE", "TE2", "SL", "Z", "FB"),
+               "path": [(0, 0), (-5, -0.6), (-10, -0.6)],
+               "desc": "A tight end or receiver walks across the formation, moving the strength and "
+                       "showing whether a defender follows him (man) or the defense shifts (zone)"},
+    "shift":  {"run": 0.6, "pass": 0.6, "slots": ("TE", "SL", "Z", "RB", "X"),
+               "path": [(0, 0), (-3, 0.0)],
+               "desc": "Two or more players reset before the snap: the defense has to re-align and "
+                       "check its calls, and a slow-reading linebacker gets caught out of place"},
+}
+# How much each system leans on each kind (default 1.0)
+SCHEME_MOTION = {
+    "Wide Zone": {"jet": 1.8, "orbit": 1.4, "across": 1.2},
+    "Zone Run": {"jet": 1.4, "across": 1.2},
+    "Wing-T": {"jet": 2.6, "shift": 0.6},
+    "Flexbone": {"orbit": 2.4, "jet": 0.8, "shift": 0.3},
+    "West Coast": {"across": 1.4, "shift": 1.3},
+    "Pro Style": {"shift": 1.7, "across": 1.2},
+    "Run and Shoot": {"across": 1.6, "shift": 0.5, "orbit": 0.6},
+    "Air Raid": {"shift": 0.4, "across": 1.3},
+    "Spread Option": {"jet": 1.3, "orbit": 1.2},
+    "Pistol": {"jet": 1.3, "across": 1.1},
+    "Power Run": {"shift": 1.4, "across": 1.3, "jet": 0.7},
+    "Air Coryell": {"shift": 1.2},
+}
+
+
+def motion_share(tendency):
+    """Share of snaps (outside a hurry-up) with pre-snap motion for a 0-1 motion tendency."""
+    return min(0.95, 0.34 + 0.66 * tendency)
+
+
+def choose_motion(scheme, run, form=None, slots=(), rng=random):
+    """The kind of pre-snap motion and the slot that moves (None if nobody can)."""
+    allowed = FORMATIONS.get(form, {}).get("motion")
+    likes = SCHEME_MOTION.get(scheme, {})
+    kinds, weights = [], []
+    for k, m in MOTIONS.items():
+        if allowed is not None and k not in allowed:
+            continue
+        if not any(s in slots for s in m["slots"]):
+            continue
+        kinds.append(k)
+        weights.append(m["run" if run else "pass"] * likes.get(k, 1.0))
+    if not kinds:
+        return None, None
+    kind = rng.choices(kinds, weights=weights)[0]
+    cand = [s for s in MOTIONS[kind]["slots"] if s in slots]
+    slot = cand[0] if rng.random() < 0.7 else rng.choice(cand)
+    return kind, slot
 
 # ── Defense ───────────────────────────────────────────────────────────────────
 from defense import COVERAGES, FRONTS  # noqa: E402  (the full defensive library lives there)
@@ -422,7 +545,8 @@ def defense_alignment(front, n_lb, n_cb, n_s, coverage):
     for x in cb_x:
         out.append(("CB", x, 1.5 if press else 6.5))
     deep = COVERAGES.get(coverage, (False, 2, ""))[1]
-    s_spots = {0: [(-8, 7), (8, 7)], 1: [(0, 13), (6, 7)], 2: [(-10, 13), (10, 13)]}[deep]
+    s_spots = {0: [(-8, 7), (8, 7)], 1: [(0, 13), (6, 7)], 2: [(-10, 13), (10, 13)],
+               3: [(-12, 13), (12, 13), (0, 15)]}.get(deep, [(-10, 13), (10, 13)])
     for i in range(n_s):
         x, y = s_spots[i] if i < len(s_spots) else (0, 9)
         out.append(("S", x, y))
@@ -455,6 +579,8 @@ def load_user_plays():
         for name, form in (data.get("formations") or {}).items():
             if isinstance(form, dict) and form.get("pers") in PERSONNEL_SLOTS and "slots" in form:
                 form["slots"] = {k: tuple(v) for k, v in form["slots"].items()}
+                if "motion" in form:
+                    form["motion"] = [k for k in (form.get("motion") or []) if k in MOTIONS]
                 FORMATIONS[name] = form
                 for table in (RUN_FORMS, PASS_FORMS):
                     table.setdefault(form["pers"], []).append(name)
@@ -462,11 +588,17 @@ def load_user_plays():
             if isinstance(r, dict) and r.get("cls") in ("deep", "medium", "short", "screen", "block"):
                 r["path"] = [tuple(p) for p in r.get("path", [])]
                 ROUTES[name] = r
+        for name, c in (data.get("coverages") or {}).items():
+            loaded += _load_coverage(name, c)
         for play in data.get("plays") or []:
             if not isinstance(play, dict) or "name" not in play or "routes" not in play:
                 continue
             if play.get("cls") not in ("deep", "medium", "short", "screen"):
                 continue
+            mo = play.get("motion")
+            if mo is not None and not (isinstance(mo, dict) and mo.get("kind") in MOTIONS
+                                       and isinstance(mo.get("slot"), str)):
+                play.pop("motion")
             if all(rt in ROUTES for rt in play["routes"].values()):
                 PASS_PLAYS.append(play)
                 for scheme, w in (play.get("schemes") or {}).items():
@@ -475,8 +607,37 @@ def load_user_plays():
     return loaded
 
 
+def _load_coverage(name, c):
+    """A custom coverage: {"man": bool, "deep": 0-3, "desc", "edges": {route: pts}, "disguise": 0-1,
+    "weight", "schemes": {system: weight}}. Built-in coverages can't be replaced."""
+    import defense as dfn
+    if not isinstance(c, dict) or name in dfn.COVERAGES or name in dfn.PRESSURES:
+        return []
+    try:
+        deep = int(c.get("deep", 2))
+        edges = {r: max(-6.0, min(6.0, float(v))) for r, v in (c.get("edges") or {}).items() if r in ROUTES}
+        disguise = max(0.0, min(1.0, float(c.get("disguise", 0.0))))
+        weight = max(0.0, float(c.get("weight", 1.0)))
+        schemes = {k: float(v) for k, v in (c.get("schemes") or {}).items()}
+    except (TypeError, ValueError, AttributeError):
+        return []
+    if deep not in (0, 1, 2, 3):
+        return []
+    dfn.COVERAGES[name] = (bool(c.get("man", False)), deep, str(c.get("desc", "")))
+    if edges:
+        dfn.COV_EDGE[name] = edges
+    if disguise:
+        dfn.DISGUISE[name] = disguise
+    dfn.EXTRA_COVERAGES[name] = weight
+    for scheme, w in schemes.items():
+        dfn.SCHEME_CALLS.setdefault(scheme, {})[name] = w
+    if name not in dfn.ALL_CALLS:
+        dfn.ALL_CALLS.append(name)
+    return [name]
+
+
 GUN_SYSTEMS = ("Air Raid", "Run and Shoot", "Spread Option")
-UNDER_CENTER_SYSTEMS = ("Power Run", "Wing-T", "Pro Style")
+UNDER_CENTER_SYSTEMS = ("Power Run", "Wing-T", "Pro Style", "Wide Zone")
 
 
 def choose_formation(pers, run, gun_bias=0.5, rng=random, scheme=None):
@@ -528,3 +689,16 @@ def route_points(slot_xy, route_name, flip=1):
     x0, y0 = slot_xy
     s = side_of(x0) * flip
     return [(x0 + dx * s, y0 + dy) for dx, dy in r["path"]]
+
+
+def motion_points(slot_xy, kind):
+    """Field points for a motion track, and where the man is when the ball is snapped."""
+    m = MOTIONS.get(kind)
+    if not m:
+        return [slot_xy], slot_xy
+    x0, y0 = slot_xy
+    s = side_of(x0)
+    pts = [(x0 + dx * s, y0 + dy) for dx, dy in m["path"]]
+    # jet and orbit men are still moving at the snap; across and shift men reset first
+    at_snap = pts[min(len(pts) - 1, 1)] if kind in ("jet", "orbit") else pts[-1]
+    return pts, at_snap

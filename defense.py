@@ -32,7 +32,26 @@ COVERAGES = {
     "Cover 6": (False, 2, "Quarter-quarter-half: Cover 4 to the strong side, Cover 2 to the weak side"),
     "Fire Zone": (False, 1, "Five-man zone pressure: three deep, three underneath"),
     "Prevent": (False, 2, "Three-man rush and deep zones; gives up the underneath to stop the big play"),
+    "Cover 2 Invert": (False, 2, "Shows Cover 2, then the corners bail to the deep halves and the safeties "
+                                 "drop into the flats: takes away the smash corner and quick outs"),
+    "Palms": (False, 2, "Quarters 2-Read: the corner jumps the flat when the inside receiver breaks out "
+                        "and the safety takes the outside man deep"),
+    "Cover 7": (True, 2, "Man-match bracket: two defenders squeeze the best receiver, everyone else plays "
+                         "man with a safety over the top"),
+    "Cover 8": (False, 2, "The mirror of Cover 6: a cloud corner and a half-field safety to the strength, "
+                          "quarters to the weak side"),
+    "Cover 9": (False, 1, "Shows two deep safeties, then one spins down at the snap into a three-deep zone: "
+                          "a disguise for the quarterback who read two-high"),
+    "Three-High": (False, 3, "Three safeties deep (big nickel): the deep middle and both halves are capped, "
+                             "but the run and the short middle are softer"),
 }
+# Coverages added by custom playbooks (name -> base selection weight); each joins the
+# calls of its family (man or zone, one or two-plus deep safeties)
+EXTRA_COVERAGES = {}
+# How much a coverage changes after the snap from what it showed before (0-1). Disguise
+# muddies the quarterback's pre-snap read and the man/zone "tell" that motion gives him.
+DISGUISE = {"Cover 9": 1.0, "Cover 2 Invert": 0.7, "Cover 8": 0.35, "Palms": 0.3, "Three-High": 0.35,
+            "Cover 3 Match": 0.25, "Cover 1 Robber": 0.15}
 
 # Openness adjustments (in engine openness points; ~9 = one standard deviation)
 # for routes against each coverage. These encode the classic "beaters":
@@ -69,7 +88,27 @@ COV_EDGE = {
     "Prevent": {"go": -8, "post": -6, "fade": -6, "seam": -5, "corner": -4, "sluggo": -6,
                 "post-corner": -5, "out-and-up": -6, "dig": 2, "curl": 4, "hitch": 5, "flat": 5,
                 "checkdown": 6, "drag": 5, "out": 3},
+    "Cover 2 Invert": {"corner": -1, "sail": -1, "flat": -2, "quick out": -2, "arrow": -2, "bubble": -1,
+                       "go": -1, "fade": -1, "seam": 3, "hitch": 2, "curl": 2, "dig": 2, "post": 2},
+    "Palms": {"flat": -3, "quick out": -3, "arrow": -2, "out": -2, "bubble": -2, "go": -2, "seam": -2,
+              "post": -2, "wheel": 3, "corner": 2, "post-corner": 2, "drag": 2, "dig": 1},
+    "Cover 7": {"go": -1, "post": -1, "slant": 1, "drag": 3, "cross": 3, "whip": 2, "wheel": 2, "angle": 2,
+                "checkdown": 2},
+    "Cover 8": {"go": -3, "post": -2, "seam": -2, "corner": -1, "flat": -1, "hitch": 2, "curl": 2, "dig": 1,
+                "drag": 2, "out": 1},
+    "Cover 9": {"seam": 3, "flat": 2, "curl": 1, "hook": 1, "go": -2, "post": -2, "fade": -2},
+    "Three-High": {"go": -5, "post": -4, "seam": -4, "skinny post": -4, "fade": -3, "corner": -3,
+                   "sluggo": -3, "post-corner": -3, "leak": -2, "dig": -1, "hitch": 3, "curl": 3, "drag": 3,
+                   "flat": 2, "stick": 2, "spot": 2, "checkdown": 3, "angle": 2, "out": 1},
 }
+# The newer routes against the classic shells
+for _cov, _edges in {
+    "Cover 0": {"jailbreak": 2, "pop": 2}, "Cover 1": {"leak": 2, "banana": 1, "pop": 1},
+    "Cover 3": {"banana": 2, "leak": 2, "pop": 2}, "Cover 2": {"banana": 2, "leak": 1},
+    "Cover 4": {"banana": -1, "leak": -1, "pop": -2}, "Fire Zone": {"jailbreak": 2, "pop": 2},
+    "Cover 3 Match": {"leak": -1}, "Palms": {"banana": 2}, "Prevent": {"jailbreak": 3},
+}.items():
+    COV_EDGE[_cov].update(_edges)
 
 # ── Fronts ────────────────────────────────────────────────────────────────────
 # run_in / run_out: change to run defence (engine points) against inside and
@@ -89,6 +128,9 @@ FRONTS = {
                   "desc": "Three-man front with the ends inside the tackles (4i-0-4i) to stop zone runs"},
     "Goal Line": {"three": False, "run_in": 4.0, "run_out": -1.0, "rush": 0.5,
                   "desc": "Heavy goal-line front with extra linemen and linebackers"},
+    "Penny":     {"three": True, "run_in": 2.5, "run_out": -0.5, "rush": 0.0,
+                  "desc": "Five on the line (a nose and two 4i tackles between the edges) and one linebacker: "
+                          "how a three-safety defense stops the run"},
 }
 
 # ── Pressures and line games ──────────────────────────────────────────────────
@@ -105,8 +147,20 @@ PRESSURES = {
                          "desc": "Both linebackers walk up into the A gaps and come; man with no help"},
     "Cover 0 Blitz":    {"rush": 6, "cov": "Cover 0", "who": ["LB", "S"],
                          "desc": "Six-man pressure; everyone else is in man coverage"},
+    "Corner Blitz":     {"rush": 5, "cov": "Cover 3", "who": ["CB"],
+                         "desc": "A corner blitzes off the edge and a safety rotates over to his receiver; "
+                                 "three deep behind it"},
+    "Edge Zone Blitz":  {"rush": 5, "cov": "Fire Zone", "who": ["LB"], "edge": True,
+                         "desc": "Five-man zone pressure from the wide side: a linebacker comes off the edge "
+                                 "and the end drops into the flat"},
 }
-SIM_PRESSURE = {"Creeper": "Four-man pressure from an unexpected spot while a lineman drops into coverage"}
+SIM_PRESSURE = {
+    "Creeper": "Four-man pressure from an unexpected spot while a lineman drops into coverage",
+    "Amoeba": "Third-down look with nobody in a stance: everyone mills around the line and the protection "
+              "has to guess which four come",
+    "Double Mug": "Both linebackers walk up into the A gaps, then one or both drop out at the snap; "
+                  "the center has to call the protection right",
+}
 STUNTS = {
     "TEX": "Tackle slants out, end loops inside behind him",
     "ET": "End crashes inside, tackle loops around to the edge",
@@ -143,7 +197,17 @@ SCHEME_CALLS = {
     "Press Man": {"Cover 1": 2.0, "2-Man": 1.8, "Cover 1 Robber": 1.6, "Cover 1 Blitz": 1.4},
     "Two-High Match": {"Cover 4": 2.6, "Cover 6": 2.0, "Tite": 2.2, "Creeper": 1.8},
     "Zone Blitz": {"Fire Zone": 2.5, "Nickel Fire Zone": 2.0, "Creeper": 2.5, "Odd": 1.5},
+    "Three-High": {"Three-High": 3.0, "Cover 9": 2.0, "Cover 4": 1.5, "Palms": 1.5, "Penny": 2.5,
+                   "Tite": 1.5, "Creeper": 1.6, "Amoeba": 1.4},
 }
+SCHEME_CALLS["Two-High Match"].update({"Palms": 2.0, "Cover 8": 1.6, "Cover 9": 1.4, "Cover 7": 1.3})
+SCHEME_CALLS["Tampa 2"].update({"Cover 2 Invert": 1.6})
+SCHEME_CALLS["Cover 3"].update({"Cover 9": 1.3, "Corner Blitz": 1.3})
+SCHEME_CALLS["Press Man"].update({"Cover 7": 1.8})
+SCHEME_CALLS["Zone Blitz"].update({"Edge Zone Blitz": 2.2, "Corner Blitz": 1.6, "Amoeba": 1.6, "Double Mug": 1.3})
+SCHEME_CALLS["46 Blitz"].update({"Double Mug": 1.6, "Corner Blitz": 1.3})
+SCHEME_CALLS["3-4 Two Gap"].update({"Edge Zone Blitz": 1.3})
+SCHEME_CALLS["4-3 Over"].update({"Cover 9": 1.2})
 
 
 def _pick(rng, opts, likes, prefs):
@@ -158,8 +222,8 @@ def choose_call(dplan, sit, scheme=None, prefs=None, rng=random):
     """
     sit: dict with down, togo, to_goal, hurry (offense in two-minute mode),
     lead (defense's lead in points), late (final minutes of a half),
-    n_cb (corners on the field), run_play (unknown to the defence, only used
-    for nothing) - the defence never sees the offensive call.
+    n_cb / n_s (corners and safeties on the field) - the defence never sees
+    the offensive call.
     Returns a dict describing the call.
     """
     prefs = prefs or {}
@@ -174,6 +238,8 @@ def choose_call(dplan, sit, scheme=None, prefs=None, rng=random):
         front = "Goal Line" if goal_line else "Bear"
     elif dplan.get("front") == "3-4":
         opts = {"Odd": 3.0, "Tite": 2.0 + (1.5 if sit.get("n_cb", 2) >= 3 else 0.0)}
+        if sit.get("n_s", 2) >= 3:
+            opts["Penny"] = 1.2
         if short:
             opts["Bear"] = 3.0
         front = _pick(rng, opts, likes, prefs)
@@ -207,7 +273,8 @@ def choose_call(dplan, sit, scheme=None, prefs=None, rng=random):
     if rng.random() < p_press:
         nickel = sit.get("n_cb", 2) >= 3
         if zone:
-            opts = {"Fire Zone": 3.0, "Nickel Fire Zone": 2.0 if nickel else 0.0}
+            opts = {"Fire Zone": 3.0, "Nickel Fire Zone": 2.0 if nickel else 0.0, "Edge Zone Blitz": 1.4,
+                    "Corner Blitz": 0.8}
         else:
             six = 0.35 + (0.25 if goal_line else 0.0)
             opts = {"Cover 1 Blitz": 3.0 * (1 - six), "Safety Blitz": 1.5 * (1 - six),
@@ -220,22 +287,33 @@ def choose_call(dplan, sit, scheme=None, prefs=None, rng=random):
 
     # Four-man rush: name the coverage
     if zone and two_high:
-        opts = {"Cover 2": 3.0, "Cover 4": 4.0, "Cover 6": 2.0, "Tampa 2": 1.5}
+        opts = {"Cover 2": 3.0, "Cover 4": 4.0, "Cover 6": 2.0, "Tampa 2": 1.5, "Palms": 1.2, "Cover 8": 0.8,
+                "Cover 2 Invert": 0.6, "Cover 9": 0.6}
     elif zone:
         opts = {"Cover 3": 2.0, "Cover 3 Sky": 1.5, "Cover 3 Buzz": 1.2, "Cover 3 Match": 1.0}
     elif two_high:
         # most man teams play it with one safety deep; 2-Man is a long-yardage call
-        opts = {"2-Man": 1.0 + (1.5 if pass_down else 0.0), "Cover 1": 1.8, "Cover 1 Robber": 0.6}
+        opts = {"2-Man": 1.0 + (1.5 if pass_down else 0.0), "Cover 1": 1.8, "Cover 1 Robber": 0.6,
+                "Cover 7": 0.7}
     else:
         opts = {"Cover 1": 3.0, "Cover 1 Robber": 1.3}
+    if zone and sit.get("n_s", 2) >= 3:
+        opts["Three-High"] = 2.5 if two_high else 1.2       # a third safety on the field caps everything deep
+    for name, w in EXTRA_COVERAGES.items():
+        man_, deep_ = COVERAGES[name][0], COVERAGES[name][1]
+        if man_ != zone and (deep_ >= 2) == two_high:
+            opts[name] = w
     cov = _pick(rng, opts, likes, prefs)
     call = {"name": cov, "cov": cov, "man": COVERAGES[cov][0], "two_high": COVERAGES[cov][1] >= 2,
             "rush": 4, "blitz": False, "who": [], "sim": False, "stunt": None, "front": front}
-    # Simulated pressure or a line game
-    sim_w = 0.06 * likes.get("Creeper", 1.0) * prefs.get("def:Creeper", 1.0) * (1.6 if pass_down else 1.0)
+    # Simulated pressure (a creeper, or a third-down look that makes the protection guess) or a line game
+    sims = {"Creeper": 1.0, "Amoeba": 0.8 if pass_down and down >= 3 else 0.0,
+            "Double Mug": 0.5 if pass_down else 0.15}
+    sim_w = sum(v * likes.get(k, 1.0) * prefs.get("def:" + k, 1.0) for k, v in sims.items()) \
+        / (1.8 if pass_down else 1.15) * 0.06 * (1.6 if pass_down else 1.0)
     if rng.random() < sim_w:
-        call["sim"] = True
-        call["name"] = f"Creeper ({cov})"
+        call["sim"] = _pick(rng, sims, likes, prefs)
+        call["name"] = f"{call['sim']} ({cov})"
         return call
     st_w = 0.16 * (1.5 if pass_down else 1.0)
     if rng.random() < st_w:
@@ -261,11 +339,17 @@ def run_edge(call, inside):
     if call["blitz"]:
         v += 1.5                         # an extra man in the box
     elif call["two_high"]:
-        v -= 1.5 if cov in ("Cover 4", "Cover 6") else 3.0     # quarters safeties still fit the run
-    elif cov in ("Cover 3 Sky", "Cover 3 Buzz", "Cover 1 Robber"):
+        # quarters safeties (and a third safety) still fit the run; a Cover 2 invert's safeties set the edge
+        v -= 1.5 if cov in ("Cover 4", "Cover 6", "Palms", "Cover 8") else 1.6 if cov == "Three-High" \
+            else 1.0 if cov == "Cover 2 Invert" else 3.0
+    elif cov in ("Cover 3 Sky", "Cover 3 Buzz", "Cover 1 Robber", "Cover 9"):
         v += 0.6                         # a safety rotated down
     if cov == "Prevent":
         v -= 3.0
+    if call.get("sim") == "Amoeba":
+        v -= 1.5                         # nobody is in his gap at the snap
+    elif call.get("sim") == "Double Mug":
+        v += 1.0 if inside else -0.5     # both A gaps are full
     return v
 
 

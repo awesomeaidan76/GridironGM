@@ -25,7 +25,12 @@
           1.5,
           -5.2
         ]
-      }
+      },
+      "motion": [
+        "jet",
+        "orbit",
+        "shift"
+      ]
     }
   },
   "routes": {
@@ -46,6 +51,24 @@
           5
         ]
       ]
+    }
+  },
+  "coverages": {
+    "Cover 3 Cloud": {
+      "man": false,
+      "deep": 1,
+      "disguise": 0.3,
+      "weight": 1.0,
+      "desc": "Cover 3 with the corner squatting in the flat to the boundary",
+      "edges": {
+        "flat": -3,
+        "quick out": -2,
+        "corner": 2,
+        "seam": 2
+      },
+      "schemes": {
+        "Cover 3": 1.6
+      }
     }
   },
   "plays": [
@@ -92,6 +115,10 @@
       "schemes": {
         "Spread Option": 1.5,
         "Pistol": 1.3
+      },
+      "motion": {
+        "slot": "SL",
+        "kind": "jet"
       }
     }
   ]

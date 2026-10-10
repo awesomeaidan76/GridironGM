@@ -232,8 +232,36 @@ GAMEDAY_DESC = [
 
 PLAYBOOK_DESC = [
     ("Offensive systems", "Each coach runs a system: Air Raid, West Coast, Run and Shoot, Spread Option, "
-     "Pistol, Pro Style, Air Coryell, Power Run, Zone Run, Wing-T or Flexbone. The system decides which "
-     "formations, pass concepts and run schemes get called most (see Tactics → Playbook)."),
+     "Pistol, Pro Style, Air Coryell, Power Run, Zone Run, Wide Zone, Wing-T or Flexbone. The system decides "
+     "which formations, pass concepts, run schemes and kinds of motion get called most (see Tactics → "
+     "Playbook). Wide Zone is the modern under-center outside zone offense: motion on almost every snap, "
+     "bootlegs, play-action shots and the leak and banana routes off the run fakes."),
+    ("Defensive systems", "4-3 Over, 3-4 Two Gap, Cover 3, Tampa 2, Press Man, Two-High Match, Zone Blitz, "
+     "46 Blitz and Three-High. A Three-High defense keeps a third safety on the field against most "
+     "personnel: three deep shells and Cover 9 rotations to take away play-action and shots, a five-man "
+     "Penny front to hold up against the run, and simulated pressures (Creeper, Amoeba) on third down."),
+    ("Pre-snap motion", "A player moving before the snap. Jet motion (a receiver sprinting across the "
+     "formation) sets up the jet sweep and makes the backside defenders respect it on other runs; orbit "
+     "motion (a loop behind the quarterback) sets up screens and misdirection; across motion moves a tight "
+     "end or receiver to the other side; a shift resets two or more players. Motion shows the quarterback "
+     "man or zone (a defender following the man in motion means man), so his reads are cleaner, and a man in "
+     "motion can't be jammed at the line. Disguised coverages (Cover 9, Cover 2 Invert) hide the answer, and "
+     "a three-high shell adjusts with its safeties so motion tells it less. A little risk too: illegal motion "
+     "and illegal shift flags, more often with careless players. The Pre-Snap Motion slider sets how often."),
+    ("Pass concepts", "Each pass play is a set of routes built to beat certain coverages; Tactics → "
+     "Playbook lists every one with its routes. Some newer ones: Spider 2 Y Banana (play-action, the tight "
+     "end arcs out behind the linebackers while the fullback runs to the flat), Leak (play-action, a tight "
+     "end slips across the field behind a defense flowing with the run), Scissors (post and corner from the "
+     "same side), Hoss (hitches outside, seams inside: a quarters and Cover 3 beater), Jailbreak Screen (the "
+     "receiver comes back inside behind released linemen) and Pop Pass (an RPO: the tight end pops up the "
+     "seam off a jet sweep fake)."),
+    ("Run schemes", "Inside and outside zone (the line steps together and the back picks a lane), duo "
+     "(double teams with no pullers, best against a light two-high box), split zone (a tight end or fullback "
+     "comes across to kick out the backside end), power and counter (gap runs with pulling linemen), pin and "
+     "pull (block down, pull around to the edge), toss and crack toss (receivers block down on the linebacker "
+     "and safety), trap, lead, draw, the jet sweep (needs jet motion) and designed quarterback runs (QB "
+     "counter, QB power: the back becomes a blocker, an extra hat at the point of attack). Wildcat snaps the "
+     "ball straight to a running back, who keeps it or hands to the jet man: one more blocker, no pass threat."),
     ("Personnel groups", "Two digits: running backs, then tight ends; the rest of the five skill players "
      "are receivers. 11 (one back, one tight end, three receivers) is the most common in the NFL; 12 adds a "
      "second tight end, 21 a fullback, 22 both, 10 is four receivers, 13 is three tight ends (heavy "
@@ -252,12 +280,25 @@ PLAYBOOK_DESC = [
      "a wrong read is usually a short gain or a loss."),
     ("Coverages", "Cover 0/1 are man coverage with zero or one deep safety; Cover 2/Tampa 2/Cover 4/Cover 6 "
      "keep two safeties deep; Cover 3 plays three deep. Every coverage has routes that beat it — corner routes "
-     "against Cover 2, seams and flats against Cover 3, crossers against man, hitches against quarters."),
+     "against Cover 2, seams and flats against Cover 3, crossers against man, hitches against quarters. "
+     "Newer shells: Palms (quarters where the corner jumps the flat), Cover 8 (Cover 6 flipped), Cover 7 "
+     "(man with two defenders bracketing the best receiver), Cover 2 Invert (shows Cover 2, the corners "
+     "bail deep and the safeties take the flats), Cover 9 (shows two-high, spins to three deep at the snap) "
+     "and Three-High (three safeties deep: kills shots and play-action, softer against the run)."),
+    ("Disguise", "How much a coverage changes from what it showed before the snap. A disguised coverage makes "
+     "the quarterback's pre-snap read noisier (less so for quarterbacks with high awareness and progression "
+     "reads) and takes away much of what motion would have told him."),
     ("Pressures and line games", "Fire zones and blitzes send five or six; they get home faster but leave "
-     "hot throws and screens open. Stunts (TEX, ET, Twist, Pirate) and simulated pressures (Creeper) "
-     "confuse a line without giving up coverage."),
-    ("Fronts", "Over/Under/Wide 9/Bear for four-man lines, Odd/Tite for three-man lines. Bear and Tite fronts "
-     "clog inside runs but are softer on the edge; a Wide 9 rushes the passer but opens inside lanes."),
+     "hot throws and screens open. A corner blitz brings a cornerback off the edge with a safety rotating to "
+     "his man; an edge zone blitz brings a linebacker from wide with the end dropping into the flat. Stunts "
+     "(TEX, ET, Twist, Pirate) and simulated pressures confuse a line without giving up coverage: Creeper "
+     "(a linebacker rushes, a lineman drops), Amoeba (nobody in a stance on third down, so the protection has "
+     "to guess, hardest on a young line) and Double Mug (both linebackers in the A gaps, the center has to "
+     "get the protection right). Green dog: in man coverage, a linebacker whose running back stays in to "
+     "block rushes the quarterback too."),
+    ("Fronts", "Over/Under/Wide 9/Bear for four-man lines, Odd/Tite/Penny for three-man lines. Bear and Tite "
+     "fronts clog inside runs but are softer on the edge; a Wide 9 rushes the passer but opens inside lanes; "
+     "Penny puts five on the line with one linebacker behind them so a three-safety defense can stop the run."),
     ("Special teams", "Kickoffs (deep, directional, squib, pooch, onside), returns (middle, sideline wall, wedge, "
      "reverse), punts (spread, directional, rugby, pooch) and the receiving side's calls (return, wall, "
      "block, safe/fake-watch). Better core special-teams players and coaches win the hidden yardage."),
