@@ -256,7 +256,7 @@ class PlayView(QWidget):
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QBrush(zc))
             widths = {1: [(-26, 26)], 2: [(-26, 0), (0, 26)]}.get(deep, [])
-            if cov.startswith("Cover 3") or cov == "Fire Zone":
+            if cov.startswith("Cover 3") or cov in ("Fire Zone", "Cover 9") or deep == 3:
                 widths = [(-26, -9), (-9, 9), (9, 26)]
             elif cov in ("Cover 4", "Cover 6", "Prevent"):
                 widths = [(-26, -13), (-13, 0), (0, 13), (13, 26)]
@@ -283,6 +283,18 @@ class PlayView(QWidget):
             if d.get("run"):
                 tip = self._pt(x + 0.8 * d.get("dir", 1), y + 2.2 * min(1.0, t * 2))
                 p.drawLine(c, tip)
+        # Pre-snap motion (dashed), then the man runs his route from where he was at the snap
+        mo = d.get("motion")
+        if mo and mo.get("slot") in slots:
+            mpts, at_snap = pb.motion_points(slots[mo["slot"]], mo.get("kind"))
+            show = self._path_upto(mpts, min(1.0, t * 3.0))
+            pen = QPen(QColor("#9fd3ff"), 1.6)
+            pen.setStyle(Qt.PenStyle.DashLine)
+            p.setPen(pen)
+            for i in range(len(show) - 1):
+                p.drawLine(self._pt(*show[i]), self._pt(*show[i + 1]))
+            if t >= 0.3:
+                slots[mo["slot"]] = at_snap
         # Routes
         for slot, xy in slots.items():
             rt = routes.get(slot)
@@ -360,7 +372,8 @@ class PlayView(QWidget):
         p.setPen(QColor("#ffffff"))
         f.setPointSize(9)
         p.setFont(f)
-        title = f"{d.get('form', '')} · {d.get('play', '')}" + ("  (play-action)" if d.get("pa") else "")
+        title = f"{d.get('form', '')} · {d.get('play', '')}" + ("  (play-action)" if d.get("pa") else "") \
+            + (f" · {mo['kind']} motion" if mo else "")
         p.drawText(QRectF(8, 6, w - 16, 18), int(Qt.AlignmentFlag.AlignLeft.value), title)
         p.drawText(QRectF(8, 6, w - 16, 18), int(Qt.AlignmentFlag.AlignRight.value),
                    f"{d.get('front', '')} front · {d.get('dcall') or cov}"

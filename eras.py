@@ -38,9 +38,9 @@ BASELINE_PRESTIGE = {
 # about it is tied to a year or a real-life era; what follows grows out of it.
 BASE_SCHEMES = {"West Coast": 15, "Pro Style": 15, "Zone Run": 14, "Air Coryell": 12,
                 "Spread Option": 10, "Power Run": 12, "Air Raid": 10, "Run and Shoot": 8,
-                "Pistol": 6, "Wing-T": 1.5, "Flexbone": 1.0}
+                "Pistol": 6, "Wing-T": 1.5, "Flexbone": 1.0, "Wide Zone": 9}
 BASE_DEFENSES = {"4-3 Over": 15, "3-4 Two Gap": 14, "Cover 3": 15, "Two-High Match": 13,
-                 "Press Man": 12, "Zone Blitz": 12, "Tampa 2": 11, "46 Blitz": 6}
+                 "Press Man": 12, "Zone Blitz": 12, "Tampa 2": 11, "46 Blitz": 6, "Three-High": 8}
 BASE_AGGRESSION = 0.50
 
 FOUNDING_LABEL = "Founding season"

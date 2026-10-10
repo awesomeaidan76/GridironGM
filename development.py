@@ -130,6 +130,11 @@ SCHEME_FIT = {
     "Press Man":     {"+": {"Press Corner", "Man Corner", "Hybrid"}, "-": {"Zone Corner"}},
     "Two-High Match": {"+": {"Hybrid", "Coverage LB", "Slot Corner", "Free Safety"}, "-": {"Thumper"}},
     "Zone Blitz":    {"+": {"Blitzer", "Interior Rusher", "Zone Corner", "Complete Edge"}, "-": {"Nose Tackle"}},
+    "Three-High":    {"+": {"Hybrid", "Free Safety", "Strong Safety", "Coverage LB", "Nose Tackle"},
+                      "-": {"Press Corner", "Thumper"}},
+    "Wide Zone":     {"+": {"Zone Mover", "Elusive Back", "Lead Blocker", "Route Technician", "Complete TE",
+                            "Field General"},
+                      "-": {"Mauler", "Gunslinger"}},
 }
 
 OFF_POS = {"QB", "RB", "FB", "WR", "TE", "OT", "IOL"}

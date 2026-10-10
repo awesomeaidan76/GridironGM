@@ -1318,11 +1318,14 @@ class TacticsScreen(Screen):
                 if play.get("forms"):
                     typ += " (" + "/".join(play["forms"]) + ")"
                 routes = ", ".join(f"{s} {r}" for s, r in play["routes"].items() if r != "block")
+                if play.get("motion"):
+                    routes += f" · {play['motion']['slot']} in {play['motion']['kind']} motion"
                 out.append((play["name"], play["name"], typ, likes.get(play["name"], 1.0), routes))
         elif kind == 1:
             likes = pb.SCHEME_RUNS.get(team.coach.off_scheme, {})
             for name, desc in pb.RUN_CONCEPT_INFO.items():
-                out.append(("run:" + name, name.title(), "option" if "option" in desc.lower() or
+                out.append(("run:" + name, name.title(), "QB run" if name.startswith("qb ") else
+                            "option" if "option" in desc.lower() or
                             name in ("zone read", "inverted veer", "midline") else "run",
                             1.0 + likes.get(name, 0.0), desc))
         elif kind == 2:
@@ -1391,6 +1394,7 @@ class TacticsScreen(Screen):
         self.refresh()
 
     def _projection(self):
+        import playbook as pb
         team = self.user
         plan = team.gameplan()
         pr = plan["pass_rate"]
@@ -1400,7 +1404,8 @@ class TacticsScreen(Screen):
             f"Deep shots: <b>{max(0, deep) * 100:.0f}%</b> of passes · Screens: "
             f"<b>{(0.025 + 0.09 * plan['screen']) * 100:.0f}%</b><br>"
             f"Outside runs: <b>{plan['outside'] * 75:.0f}%</b> · Designed QB runs: "
-            f"<b>{plan['qb_run'] * 16:.0f}%</b> of runs<br>"
+            f"<b>{plan['qb_run'] * 16:.0f}%</b> of runs · Pre-snap motion: "
+            f"<b>{pb.motion_share(plan['motion']) * 100:.0f}%</b> of snaps<br>"
             f"Tempo: <b>{_word(plan['tempo'], ('Methodical', 'Steady', 'Up-tempo', 'Hurry-up'))}</b> · "
             f"4th-down aggression: <b>{_word(plan['aggression'], ('Very cautious', 'Cautious', 'Bold', 'Very bold'))}</b><br>"
             f"Blitz rate: <b>{plan['blitz'] * 55:.0f}%</b> of dropbacks · Zone: <b>{plan['zone'] * 100:.0f}%</b> · "

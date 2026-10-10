@@ -720,7 +720,7 @@ def innovator_coach(lg):
     off_w = {k: 1.0 for k in OFFENSIVE_SCHEMES}
     off_w.update({"Wing-T": 0.3, "Flexbone": 0.2})
     if two_high > 0.55:
-        for k in ("Zone Run", "Power Run", "Pistol"):
+        for k in ("Zone Run", "Power Run", "Pistol", "Wide Zone"):
             off_w[k] = 3.0
         off_w["Wing-T"], off_w["Flexbone"] = 0.8, 0.5
     elif two_high < 0.42:
@@ -728,7 +728,7 @@ def innovator_coach(lg):
             off_w[k] = 2.5
     def_w = {k: 1.0 for k in DEFENSIVE_SCHEMES}
     if pass_rate > 59.5:
-        for k in ("Two-High Match", "Tampa 2", "Cover 3"):
+        for k in ("Two-High Match", "Tampa 2", "Cover 3", "Three-High"):
             def_w[k] = 3.0
     elif pass_rate < 53:
         for k in ("46 Blitz", "4-3 Over", "Press Man"):

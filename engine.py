@@ -285,6 +285,7 @@ class GameSim:
         self.fat = {}                   # pid -> attribute penalty from fatigue
         self._rat = {}                  # (pid, pos) -> rating, cached for rotation decisions
         self.no_huddle = False
+        self._motion_kind = None
 
         self.weather = wx.roll_weather(home.abbr, week, playoff, neutral) \
             if settings["weather"] else None
@@ -1380,6 +1381,7 @@ class GameSim:
         self._adv = None
         self._adv_void = False
         self._ocall = None
+        self._motion_kind = None
         self.dcall = None
         self._last_tackler = None
         self._rush_winner = None
@@ -1507,14 +1509,16 @@ class GameSim:
         ts_off = self.res.team_stats[side.abbr]
         ts_def = self.res.team_stats[other.abbr]
         if self._ocall:
-            ts_off[f"oc|{self._ocall}|n"] += 1
-            ts_off[f"oc|{self._ocall}|epa"] += e
-            if good:
-                ts_off[f"oc|{self._ocall}|s"] += 1
+            mo = getattr(self, "_motion_kind", None)
+            for call in (self._ocall, f"Motion: {mo}" if mo else "No motion"):
+                ts_off[f"oc|{call}|n"] += 1
+                ts_off[f"oc|{call}|epa"] += e
+                if good:
+                    ts_off[f"oc|{call}|s"] += 1
         dc = self.dcall
         if dc is not None:
             for fam in (dc["cov"], "Pressure (5+ rushers)" if dc["blitz"] else
-                        ("Line stunt" if dc["stunt"] else "Creeper" if dc["sim"] else "Four-man rush"),
+                        ("Line stunt" if dc["stunt"] else dc["sim"] if dc["sim"] else "Four-man rush"),
                         dc["front"] + " front"):
                 ts_def[f"dc|{fam}|n"] += 1
                 ts_def[f"dc|{fam}|epa"] += e
@@ -1651,6 +1655,19 @@ class GameSim:
         dm, dunf = self._flag_odds(self.dfn, "def")
         off_disc = (1.35 - self.poss.disc / 100.0 * 0.7) * om
         def_disc = (1.35 - self.dfn.disc / 100.0 * 0.7) * dm
+        # Illegal motion / illegal shift: a cost of moving people before the snap
+        mov = pb.motion_share(self.poss.plan.get("motion", 0.5))
+        if random.random() < 0.0030 * mov * om * self.pen_rate:
+            pool = self.poss.lu["WR"][:3] + self.poss.lu["TE"][:1]
+            if pool:
+                p = random.choices(pool, weights=[max(5, 105 - self.e(x, "awareness")) for x in pool])[0]
+                name = random.choice(["Illegal motion", "Illegal shift"])
+                self._penalty(self.poss, p, name, 5)
+                self.yl = max(1, self.yl - 5)
+                self.togo += 5
+                self.log(f"PENALTY: {name}, {self.poss.abbr} ({_short(p.name)}), 5 yards", "play")
+                self.run_clock(0, False)
+                return True
         r = random.random()
         if r < rate * off_disc * 0.55:
             name = random.choice(["False start", "False start", "Delay of game",
@@ -1882,6 +1899,8 @@ class GameSim:
         lean = 0.15 + 0.35 * d.plan.get("two_high", 0.5)
         if "S3" in d.pk_set:
             lean += 0.25
+        if d.team.coach.def_scheme == "Three-High":
+            lean += 0.35                    # the system is built on a third safety
         if len(lbs) >= 3:
             lean += _clip((s3[0].rating_at("S3") - lbs[2].rating_at("LB")) / 40.0, -0.3, 0.3)
         return _clip(lean, 0.0, 0.9)
@@ -1901,6 +1920,9 @@ class GameSim:
                                             and self.clock <= 90 and self.poss.score < d.score))
             pkg = packages.choose_def_package(pers, d.plan["front"], to_goal, self.togo, self.down,
                                               late_long, self._big_nickel_lean(d), random)
+            if pkg == "Nickel" and d.team.coach.def_scheme == "Three-High" and d.lu.get("S3") \
+                    and random.random() < 0.5:
+                pkg = "Big Nickel"          # the system's base: a third safety instead of a nickel corner
         d.last_pkg = pkg
         self.ts(d, f"dpkg|{pkg}")
         n_dt, n_edge, n_lb, n_cb, n_s = packages.DEF_PACKAGES[pkg]
@@ -1929,13 +1951,13 @@ class GameSim:
         v += (staff_mod.off_calling(self.poss.team) - 10) * 0.35
         return v
 
-    def _def_call(self, n_cb):
+    def _def_call(self, n_cb, n_s=2):
         """The defensive coordinator's call for this snap (he never sees the offensive call)."""
         de = self.dfn
         sit = {"down": self.down, "togo": self.togo, "to_goal": 100 - self.yl,
                "hurry": self.urgency(self.poss) == "hurry",
                "late": (self.quarter == 4 and self.clock <= 150) or (self.quarter == 2 and self.clock <= 40),
-               "lead": de.score - self.poss.score, "n_cb": n_cb}
+               "lead": de.score - self.poss.score, "n_cb": n_cb, "n_s": n_s}
         dp = dict(de.plan)
         for k in ("blitz", "zone", "two_high"):
             dp[k] = _clip(dp[k] + de.dgp.get(k, 0.0) + de.dadj.get(k, 0.0), 0.0, 1.0)
@@ -2046,7 +2068,7 @@ class GameSim:
         route_of = {p.id: pb.route_for(play, slot) for slot, p in slot_of.items()}
 
         # The defensive call
-        dc = self._def_call(len(cbs))
+        dc = self._def_call(len(cbs), len(ss))
         blitz = dc["blitz"]
         # Backs with a protection assignment check-release when nobody comes
         if not blitz and not pa and not call.get("rpo"):
@@ -2059,21 +2081,31 @@ class GameSim:
         kinds.update({p.id: "inside" for p in dts})
         cov_lbs, cov_ss, cov_cbs = list(lbs), list(ss), list(cbs)
         for who in dc["who"]:
-            pool = {"LB": cov_lbs, "S": cov_ss, "NB": cov_cbs[2:] or cov_lbs}[who]
+            if who == "CB":
+                pool = cov_cbs[1:2] or cov_cbs      # the second corner comes off the edge
+            else:
+                pool = {"LB": cov_lbs, "S": cov_ss, "NB": cov_cbs[2:] or cov_lbs}[who]
             if pool:
                 b = pool[-1]
                 for lst in (cov_lbs, cov_ss, cov_cbs):
                     if b in lst:
                         lst.remove(b)
+                if who == "CB" and cov_ss:
+                    cov_cbs.insert(1, cov_ss.pop())   # a safety rotates down to the corner's man
                 rushers.append((b, 0.55))
                 kinds[b.id] = "blitz"
         if dc["rush"] == 3 and dts:
             rushers = [r for r in rushers if r[0] is not dts[-1]]
         if self._spy_on and cov_lbs:
             cov_lbs.pop(0)                       # the spy mirrors the quarterback
-        if dc["sim"] and dts and lbs:
-            rushers = [r for r in rushers if r[0] is not dts[-1]] + [(lbs[-1], 0.62)]
-            kinds[lbs[-1].id] = "blitz"
+        sim = dc["sim"]
+        if sim and dts and lbs and (sim == "Creeper" or random.random() < (0.6 if sim == "Amoeba" else 0.5)):
+            # a linebacker comes and a lineman drops: four rushers, but not the four the line expected
+            lb_in = lbs[-1] if sim != "Double Mug" else lbs[0]
+            rushers = [r for r in rushers if r[0] is not dts[-1]] + [(lb_in, 0.62)]
+            kinds[lb_in.id] = "blitz"
+            if lb_in in cov_lbs:
+                cov_lbs.remove(lb_in)
         keep_in = []
         if rb and random.random() < (0.22 if not blitz else 0.45):
             keep_in.append(rb)
@@ -2083,6 +2115,13 @@ class GameSim:
             p = slot_of.get(slot)
             if p is not None and route_of.get(p.id) == "block" and p not in keep_in:
                 keep_in.append(p)
+        if dc["man"] and not blitz and rb in keep_in and cov_lbs:
+            # Green dog: the linebacker on the back sees him stay in to block and rushes too
+            gd = cov_lbs[-1]
+            if random.random() < 0.5 * _clip((e(gd, "play_recognition") - 50) / 40.0, 0.2, 1.0):
+                cov_lbs.remove(gd)
+                rushers.append((gd, 0.45))
+                kinds[gd.id] = "blitz"
         zone = not dc["man"]
         two_high = dc["two_high"]
         coverage = dc["cov"]
@@ -2093,6 +2132,11 @@ class GameSim:
                              "names": {s: (p.jersey, _short(p.name)) for s, p in slot_of.items()},
                              "cov": coverage, "front": dc["front"], "blitz": blitz, "dcall": dc["name"],
                              "n_lb": len(lbs), "n_cb": len(cbs), "n_s": len(ss), "pa": pa}
+        # Pre-snap motion: the man in motion beats a press jam and shows the quarterback man or zone;
+        # a three-high shell bumps its safeties instead of its linebackers and gives less away
+        mo = self._motion(off, form_name, slot_of, run=False, play=play)
+        mfac = 0.5 if coverage == "Three-High" else 1.0
+        disguise = dfn_lib.DISGUISE.get(coverage, 0.0)
 
         # Targets & coverage: the receivers running routes in this concept
         cands = self._receivers(wrs, tes, rb, fbp, ptype)
@@ -2115,13 +2159,19 @@ class GameSim:
         marked = next((c[0] for c in threats if c[0].id == target), None)
         if marked is not None:
             star = marked
-        bracket = star is not None and \
-            random.random() < de.dgp.get("bracket", 0.5) * (1.25 if two_high else 0.6)
+        p_bracket = de.dgp.get("bracket", 0.5) * (1.25 if two_high else 0.6)
+        if coverage == "Cover 7":
+            p_bracket = max(p_bracket, 0.9)        # the call is the bracket
+        bracket = star is not None and random.random() < p_bracket
         scored = []
         pa_bonus = 0.0
         if pa:
             lb_bite = sum(e(p, "play_recognition") for p in lbs) / max(1, len(lbs))
             pa_bonus = _clip(5.0 - (lb_bite - 65) * 0.12 + (e(qb, "play_action") - 70) * 0.06, 1.0, 9.0)
+            if mo is not None and mo["kind"] == "jet":
+                pa_bonus *= 1.15                   # the jet fake and the hand-off fake together
+            if coverage == "Three-High":
+                pa_bonus *= 0.65                   # three deep: nobody is left alone behind the linebackers
             if call.get("trick") == "flea":
                 pa_bonus += 9.0
         bust = self._bust
@@ -2137,6 +2187,12 @@ class GameSim:
                 o += -9.0 if r is star else 2.5
             if pa:
                 o += pa_bonus * (1.0 if ptype in ("medium", "deep") else 0.4)
+            if mo is not None:
+                if r is mo["man"]:
+                    o += (2.0 + _clip((e(d, "press_technique") - 60) * 0.03, 0.0, 1.0)
+                          if not zone and d is not None else 0.6) * mfac
+                if ptype == "screen" and mo["kind"] in ("jet", "orbit"):
+                    o += 1.5 * mfac                # the defense flows with the motion
             if call.get("rpo") and role.startswith(("WR", "TE")):
                 o += 4.0          # the conflict defender can't play both
             if role.startswith(("WR", "TE")):
@@ -2162,20 +2218,33 @@ class GameSim:
                                              in ("short", "screen") else 0.0), d)
                           for (r, role, pr, o, d) in scored]
 
-        # The quarterback's progression: first read, second, third... then the checkdown
-        prog = self._progression(qb, scored, ptype, hot)
+        # The quarterback's progression: first read, second, third... then the checkdown.
+        # A disguised coverage muddies what he sees; motion clears it up.
+        rd_skill = _clip(((e(qb, "awareness") + e(qb, "progression_reads")) / 2.0 - 55) / 40.0, 0.0, 1.0)
+        nm = 1.0 + 0.45 * disguise * (1.0 - rd_skill)
+        if mo is not None:
+            nm *= 1.0 - self.MOTION_READ[mo["kind"]] * (1.0 - disguise) * mfac
+        prog = self._progression(qb, scored, ptype, hot, noise_mult=nm)
         time_req_extra = prog["time"]
         # Protection: every rusher against his blocker(s)
         edge_add = dfn_lib.FRONTS[dc["front"]]["rush"] \
             + (staff_mod.def_calling(de.team) - staff_mod.off_calling(off.team)) * 0.35
-        if dc["sim"]:
+        ol_aw = sum(e(p, "awareness") for p in off.ol) / max(1, len(off.ol))
+        if sim == "Creeper":
             edge_add += 2.0 - (e(qb, "progression_reads") - 70) * 0.10
+        elif sim == "Amoeba":
+            # nobody in a stance: the line has to guess which four are coming
+            edge_add += 2.5 - (ol_aw - 70) * 0.12 - (e(qb, "awareness") - 70) * 0.04
+        elif sim == "Double Mug":
+            edge_add += 1.8 - (e(qb, "awareness") - 70) * 0.08
+        if dc["name"] in ("Corner Blitz", "Edge Zone Blitz"):
+            # pressure from the wide side is the hardest for a back to pick up
+            edge_add += 1.0 - (e(qb, "awareness") - 70) * 0.05
         if dc["rush"] == 3:
             edge_add -= 6.0
         stunt = 0.0
         if dc["stunt"]:
             # Line games: a sharp, experienced line passes them off; a green one gives up a free rusher
-            ol_aw = sum(e(p, "awareness") for p in off.ol) / max(1, len(off.ol))
             stunt = 1.5 - (ol_aw - 70) * 0.18 + random.gauss(0, 3.0)
         time_req = {"screen": -1.3, "short": -0.40, "medium": 0.18, "deep": 0.48,
                     "hail": 0.6}[ptype]
@@ -2372,7 +2441,7 @@ class GameSim:
         return _clip(0.35 + (h.get("ambition", 50) - 50) / 160.0 + (50 - h.get("temperament", 50)) / 220.0
                      + (qb.a("throw_power") - 80) / 120.0 + (60 - qb.a("decision_making")) / 260.0, 0.0, 1.0)
 
-    def _progression(self, qb, scored, ptype, hot=False):
+    def _progression(self, qb, scored, ptype, hot=False, noise_mult=1.0):
         """
         Work the reads in order. The concept decides the order (primary first); the
         quarterback sees how open each man is (better processors see it more
@@ -2384,7 +2453,7 @@ class GameSim:
         reads = e(qb, "progression_reads")
         dm = e(qb, "decision_making")
         aggr = self._qb_aggression(qb)
-        noise = _clip(8.0 - (dm - 60) / 6.0, 2.5, 11.0)
+        noise = _clip(8.0 - (dm - 60) / 6.0, 2.5, 11.0) * noise_mult
         max_reads = 2 + (reads >= 68) + (reads >= 82)
         order = sorted(scored, key=lambda s_: -(s_[2] * random.lognormvariate(0, 0.35)))
         if hot:
@@ -2742,8 +2811,45 @@ class GameSim:
         "midline":       {"run_block": 0.40, "strength": 0.25, "impact_block": 0.15, "awareness": 0.20},
         "speed option":  {"run_block": 0.35, "agility": 0.35, "awareness": 0.30},
     })
-    OUTSIDE = ("outside zone", "toss", "jet sweep", "reverse", "buck sweep", "speed option")
+    RUN_BLOCK.update({
+        "duo":           {"run_block": 0.40, "strength": 0.30, "impact_block": 0.20, "awareness": 0.10},
+        "split zone":    {"run_block": 0.45, "agility": 0.10, "strength": 0.15, "awareness": 0.30},
+        "pin and pull":  {"run_block": 0.30, "pulling": 0.35, "agility": 0.25, "awareness": 0.10},
+        "qb counter":    {"run_block": 0.35, "pulling": 0.35, "agility": 0.15, "awareness": 0.15},
+        "qb power":      {"run_block": 0.40, "pulling": 0.25, "strength": 0.25, "impact_block": 0.10},
+        "crack toss":    {"run_block": 0.30, "agility": 0.35, "pulling": 0.25, "awareness": 0.10},
+        "wildcat":       {"run_block": 0.40, "pulling": 0.20, "strength": 0.25, "awareness": 0.15},
+    })
+    OUTSIDE = ("outside zone", "toss", "jet sweep", "reverse", "buck sweep", "speed option", "pin and pull",
+               "crack toss")
     OPTION = ("zone read", "inverted veer", "triple option", "midline", "speed option")
+    QB_DESIGNED = ("qb counter", "qb power")
+    # How much each kind of motion sharpens the quarterback's pre-snap read (less read noise)
+    MOTION_READ = {"jet": 0.12, "orbit": 0.12, "across": 0.18, "shift": 0.10}
+
+    def _motion(self, side, form, slot_of, run, play=None, force=None):
+        """Pre-snap motion on this snap: {"kind", "slot", "man"}, or None."""
+        want = force or (play or {}).get("motion")
+        kind = slot = None
+        if want and want.get("slot") in slot_of:
+            kind, slot = want["kind"], want["slot"]
+        else:
+            p = pb.motion_share(side.plan.get("motion", 0.5))
+            if self.urgency(side) == "hurry":
+                p *= 0.3                          # two-minute drill: no time to move people around
+            elif self.no_huddle:
+                p *= 0.6
+            if random.random() < p:
+                kind, slot = pb.choose_motion(side.team.coach.off_scheme, run, form, tuple(slot_of))
+        if kind is None:
+            return None
+        man = slot_of[slot]
+        self._set_energy(man, self.energy_of(man) - 0.2)
+        self._motion_kind = kind
+        self.ts(side, "motion_snaps")
+        if self.cur_diag is not None:
+            self.cur_diag["motion"] = {"slot": slot, "kind": kind}
+        return {"kind": kind, "slot": slot, "man": man}
 
     def _call_label(self, call, pa):
         if call.get("trick") == "flea":
@@ -2752,7 +2858,7 @@ class GameSim:
             return "RPO "
         return "play-action " if pa else ""
 
-    def _run_concept(self, plan, dplan, wrs, scheme=None, qb=None, fbp=None):
+    def _run_concept(self, plan, dplan, wrs, scheme=None, qb=None, fbp=None, tes=()):
         to_goal = 100 - self.yl
         short = self.togo <= 2 or to_goal <= 3
         out = plan["outside"]
@@ -2773,9 +2879,17 @@ class GameSim:
             + (0.6 * sit_tendency(self.poss.team.coach, "sit_long") if self.down >= 3 and self.togo >= 9 else 0.0)
             + 0.25 * max(0.0, plan["pass_rate"] - 0.5),
             "toss": 0.06 + 0.25 * out,
+            "duo": 0.10 + 0.20 * plan["heavy"],
+            "pin and pull": 0.04 + 0.12 * out,
+            "qb counter": (0.004 + 0.10 * plan["qb_run"]) * mob,
+            "qb power": (0.004 + 0.07 * plan["qb_run"]) * mob,
         })
+        if fbp is not None or tes:
+            w["split zone"] = 0.08 + 0.25 * out      # needs a tight end or fullback to come across
+        if len(wrs) >= 2:
+            w["crack toss"] = 0.03 + 0.05 * out      # needs receivers to crack down
         for k, add in pb.SCHEME_RUNS.get(scheme, {}).items():
-            if k in self.OPTION and k not in ("triple option", "midline"):
+            if (k in self.OPTION and k not in ("triple option", "midline")) or k in self.QB_DESIGNED:
                 add *= max(0.25, mob)
             w[k] = max(0.02 if k in w else 0.0, w.get(k, 0.0) + add)
         prefs = getattr(self.poss.team, "play_prefs", None) or {}
@@ -2785,13 +2899,16 @@ class GameSim:
         fast = max(wrs, key=lambda p: p.a("speed")) if wrs else None
         if fast is not None and fast.a("speed") >= 86 and not short:
             w["jet sweep"] = 0.015 + 0.06 * out * (0.5 + plan["trick"])
+        if fast is not None:
+            w["wildcat"] = (0.003 + 0.015 * plan["trick"]) * prefs.get("run:wildcat", 1.0)
         if short:
-            for k in ("draw", "speed option", "toss", "buck sweep"):
+            for k in ("draw", "speed option", "toss", "buck sweep", "crack toss", "pin and pull"):
                 if k in w:
                     w[k] *= 0.4
         if to_goal <= 3:
-            gl = {"inside zone": 1.0, "power": 1.4, "toss": 0.15, "lead": 0.5 if fbp is not None else 0.0}
-            for k in ("midline", "triple option", "zone read", "trap", "buck sweep"):
+            gl = {"inside zone": 1.0, "power": 1.4, "toss": 0.15, "lead": 0.5 if fbp is not None else 0.0,
+                  "duo": 0.5}
+            for k in ("midline", "triple option", "zone read", "trap", "buck sweep", "qb power", "wildcat"):
                 if w.get(k, 0) > 0.3:
                     gl[k] = w[k]
             w = gl
@@ -2811,7 +2928,7 @@ class GameSim:
                          self._off_slots(off, wrs, tes), self._def_slots(dts, edges, lbs, cbs, ss))
         self.ts(off, "plays")
         slot_of = self._slot_map(pers, wrs, tes, rb, fbp)
-        dc = self._def_call(len(cbs))
+        dc = self._def_call(len(cbs), len(ss))
         gun = 0.25 + 0.5 * plan["tempo"] + 0.3 * plan["qb_run"]
         run_form = pb.choose_formation(pers, run=True, gun_bias=min(1.0, gun), scheme=off.team.coach.off_scheme)
         self._track_form(off, pers, run_form)
@@ -2826,7 +2943,7 @@ class GameSim:
         if not call:
             # Designed QB run?
             qb_mob = (e(qb, "speed") - 65) / 30.0
-            if random.random() < plan["qb_run"] * 0.22 * _clip(0.5 + qb_mob, 0.2, 1.6):
+            if random.random() < plan["qb_run"] * 0.19 * _clip(0.5 + qb_mob, 0.2, 1.6):
                 if self.cur_diag is not None:
                     self.cur_diag.update(run="qb run", carrier="QB", play="QB Keeper")
                 return self._qb_run(qb, scramble=False, lbs=lbs, ss=ss, dts=dts)
@@ -2836,15 +2953,20 @@ class GameSim:
                 return self._qb_sneak(qb, dts + edges + lbs)
 
         scheme = off.team.coach.off_scheme
-        concept, fast = self._run_concept(plan, de.plan, wrs, scheme=scheme, qb=qb, fbp=fbp)
+        concept, fast = self._run_concept(plan, de.plan, wrs, scheme=scheme, qb=qb, fbp=fbp, tes=tes)
         self._ocall = concept
         if call.get("concept"):
             concept = call["concept"]
         elif call.get("rpo"):
             concept = "inside zone" if random.random() < 0.65 else "outside zone"
         carrier = rb
+        lead_blocker = None
         if concept in ("jet sweep", "reverse"):
             carrier = fast or (wrs[0] if wrs else rb)
+        elif concept in self.QB_DESIGNED and qb is not None:
+            carrier, lead_blocker = qb, rb      # the back becomes a lead blocker
+        elif concept == "split zone":
+            lead_blocker = fbp if fbp is not None else (tes[0] if tes else None)   # the kick-out man
         elif concept == "lead" and fbp is not None and random.random() < 0.06:
             carrier = fbp
         elif concept in ("midline", "triple option") and fbp is not None:
@@ -2910,6 +3032,22 @@ class GameSim:
             option_note = {True: " (keep)", False: ""}[carrier is qb]
             if path_key == "pitch":
                 option_note = " (pitch)"
+        elif concept == "wildcat" and carrier is not qb:
+            # Direct snap to the back: he reads the end and keeps it or gives to the jet man
+            crash = random.random() < 0.45
+            smart = random.random() < _clip(0.55 + (e(carrier, "awareness") - 60) / 90.0, 0.4, 0.9)
+            give = crash if smart else not crash
+            if give and fast is not None and fast is not carrier:
+                carrier, outside, path_key = fast, True, "jet sweep"
+                option_note = " (jet give)"
+            read_edge = 0.30 if smart else -0.30
+        # Pre-snap motion (a jet sweep or a wildcat needs the jet man moving)
+        force = None
+        if concept in ("jet sweep", "wildcat") and fast is not None:
+            fslot = next((s_ for s_, p in slot_of.items() if p is fast), None)
+            if fslot is not None:
+                force = {"kind": "jet", "slot": fslot}
+        mo = self._motion(off, run_form, slot_of, run=True, force=force)
         if self.cur_diag is not None:
             cslot = next((s for s, p in slot_of.items() if p is carrier), "QB")
             self.cur_diag.update(run=path_key if path_key in pb.RUN_PATHS else concept, carrier=cslot,
@@ -2919,6 +3057,8 @@ class GameSim:
         wts = self.RUN_BLOCK[concept]
         front = dts + edges
         lead = fbp if (fbp is not None and carrier is not fbp) else None
+        if lead_blocker is not None and lead_blocker is not carrier:
+            lead = lead_blocker
         bd, blk_events = trenches.run_matchups(e, off.ol, tes, lead, front, lbs, ss, not outside,
                                                self._run_side, wts, pos=self._pos, bust=self._bust)
         extra = sum((e(t, "run_block") - 55) * 0.05 for t in tes)
@@ -2931,6 +3071,21 @@ class GameSim:
         if ex:
             bd += ex["run_edge"]
         self._run_events = blk_events
+        if mo is not None:
+            lb_rec = sum(e(p, "play_recognition") for p in lbs) / max(1, len(lbs))
+            mfac = 0.5 if dc["cov"] == "Three-High" else 1.0
+            k = mo["kind"]
+            if k == "jet" and concept not in ("jet sweep", "wildcat"):
+                # the jet fake holds the backside: somebody has to respect the sweep
+                bd += (0.10 + _clip((e(mo["man"], "speed") - 80) / 50.0, 0.0, 0.2)) * mfac \
+                    - _clip((lb_rec - 70) * 0.004, -0.05, 0.08)
+            elif k == "orbit":
+                bd += (0.15 if concept in ("counter", "qb counter", "split zone", "reverse", "trap")
+                       else 0.05) * mfac
+            elif k == "across":
+                bd += (0.08 if self._pos(mo["man"]) in ("TE", "FB") else 0.03) * mfac
+            elif k == "shift":
+                bd += _clip((70 - lb_rec) * 0.01, -0.05, 0.15) * mfac
 
         # Concept-specific edges
         sd_mult, stuff_add, big_mult, mean_add = 1.0, 0.0, 1.0, 0.0
@@ -2969,6 +3124,37 @@ class GameSim:
         elif concept == "buck sweep":
             bd += 0.15
             sd_mult, stuff_add, big_mult = 1.2, 0.03, 1.25
+        elif concept == "duo":
+            # double teams everywhere: wins against a light two-high box, struggles against a loaded one
+            bd += 0.25 if dc["two_high"] else -0.10
+            sd_mult, big_mult = 0.9, 0.9
+            if self.togo <= 2:
+                stuff_add -= 0.02
+        elif concept == "split zone":
+            bd += 0.05 + ((e(lead, "impact_block") + e(lead, "run_block")) / 2.0 - 60) / 200.0 \
+                if lead is not None else -0.15
+            if dc["blitz"] or dc["stunt"]:
+                bd += 0.15                   # the backside crash is exactly what the kick-out is for
+            sd_mult, big_mult = 1.05, 1.05
+        elif concept == "pin and pull":
+            bd += 0.0 if not dc["blitz"] else -0.20   # a blitzer through the vacated gap blows it up
+            sd_mult, stuff_add, big_mult = 1.15, 0.02, 1.15
+        elif concept in self.QB_DESIGNED:
+            bd += 0.25                       # the quarterback as the runner: one more blocker than defenders
+            if concept == "qb counter":
+                bd += 0.20 if dc["blitz"] else -0.05
+                sd_mult, stuff_add, big_mult = 1.15, 0.02, 1.15
+            else:
+                sd_mult, big_mult = 0.9, 0.9
+                if self.togo <= 2:
+                    stuff_add -= 0.03
+        elif concept == "crack toss":
+            crackers = [w_ for w_ in wrs[:2]]
+            bd += 0.05 + (sum(e(w_, "run_block") for w_ in crackers) / max(1, len(crackers)) - 55) * 0.008
+            sd_mult, stuff_add, big_mult = 1.3, 0.04, 1.45
+        elif concept == "wildcat":
+            bd += 0.25 + read_edge           # an extra blocker, but the defense can play the run
+            sd_mult, stuff_add, big_mult = 1.15, 0.02, 1.2
         elif concept in self.OPTION:
             bd += read_edge
             sd_mult, big_mult = 1.15, 1.25
@@ -3044,7 +3230,7 @@ class GameSim:
         elif concept in self.OPTION:
             label = f"{concept} {side}" + option_note
         else:
-            label = f"{concept} {side}"
+            label = f"{concept} {side}" + option_note
         if call.get("rpo"):
             label = "RPO handoff, " + label
         return self._finish_run(carrier, yards, outside, tacklers, dts + edges + lbs, label=label)

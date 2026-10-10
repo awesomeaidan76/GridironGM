@@ -523,6 +523,19 @@ def main():
         box.setCurrentIndex(0)
     assert not lg.user_team.def_gameplan
     step("game plan")
+    # Pre-snap motion and the newer calls show up in the play-calling reports
+    mine = lg.team_results(user.abbr)
+    mo_n = sum(g.team_stats[user.abbr].get("motion_snaps", 0) for g in mine)
+    pl_n = sum(g.team_stats[user.abbr].get("plays", 0) for g in mine)
+    calls = {k.split("|")[1] for g in mine for k in g.team_stats[user.abbr] if isinstance(k, str) and "|" in k}
+    assert 0.2 < mo_n / max(1, pl_n) < 0.97 and "No motion" in calls and \
+        any(c.startswith("Motion: ") for c in calls), (mo_n, pl_n)
+    newer = {"Palms", "Cover 7", "Cover 8", "Cover 9", "Cover 2 Invert", "duo", "split zone", "Hoss",
+             "Spider 2 Y Banana", "Scissors"}
+    seen = {k.split("|")[1] for g in lg.all_results() for ab in (g.home, g.away)
+            for k in g.team_stats[ab] if isinstance(k, str) and k.count("|") == 2} & newer
+    assert len(seen) >= 6, seen
+    step(f"motion on {mo_n / max(1, pl_n):.0%} of our snaps; newer calls seen: {len(seen)}/{len(newer)}")
     st = win.screens["stats"]
     win.goto("stats")
     from ui_screens_league import STAT_TABS

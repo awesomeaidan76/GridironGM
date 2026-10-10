@@ -18,30 +18,34 @@ import names
 #   heavy      : use of 2-TE / fullback personnel (0..1)
 #   tempo      : pace (0 slow .. 1 hurry-up)
 #   screen     : screen game usage (0..1)
+#   motion     : pre-snap motion and shifts (0..1)
 OFFENSIVE_SCHEMES = {
     "West Coast":    dict(pass_lean=0.10, deep=-0.55, outside=0.45, qb_run=0.05,
-                          heavy=0.30, tempo=0.45, screen=0.55),
+                          heavy=0.30, tempo=0.45, screen=0.55, motion=0.65),
     "Air Coryell":   dict(pass_lean=0.22, deep=0.75, outside=0.40, qb_run=0.05,
-                          heavy=0.30, tempo=0.50, screen=0.25),
+                          heavy=0.30, tempo=0.50, screen=0.25, motion=0.40),
     "Air Raid":      dict(pass_lean=0.55, deep=0.05, outside=0.55, qb_run=0.10,
-                          heavy=0.00, tempo=0.85, screen=0.55),
+                          heavy=0.00, tempo=0.85, screen=0.55, motion=0.25),
     "Run and Shoot": dict(pass_lean=0.55, deep=0.35, outside=0.50, qb_run=0.05,
-                          heavy=0.00, tempo=0.65, screen=0.30),
+                          heavy=0.00, tempo=0.65, screen=0.30, motion=0.60),
     "Spread Option": dict(pass_lean=-0.10, deep=0.00, outside=0.60, qb_run=0.92,
-                          heavy=0.10, tempo=0.75, screen=0.45),
+                          heavy=0.10, tempo=0.75, screen=0.45, motion=0.45),
     "Power Run":     dict(pass_lean=-0.50, deep=0.15, outside=0.20, qb_run=0.05,
-                          heavy=0.80, tempo=0.25, screen=0.20),
+                          heavy=0.80, tempo=0.25, screen=0.20, motion=0.45),
     "Zone Run":      dict(pass_lean=-0.25, deep=0.00, outside=0.75, qb_run=0.10,
-                          heavy=0.55, tempo=0.45, screen=0.35),
+                          heavy=0.55, tempo=0.45, screen=0.35, motion=0.65),
     "Pro Style":     dict(pass_lean=0.00, deep=0.05, outside=0.45, qb_run=0.05,
-                          heavy=0.45, tempo=0.45, screen=0.35),
+                          heavy=0.45, tempo=0.45, screen=0.35, motion=0.55),
     # Systems borrowed from the college and high-school game
     "Pistol":        dict(pass_lean=-0.15, deep=0.10, outside=0.50, qb_run=0.55,
-                          heavy=0.35, tempo=0.55, screen=0.35),
+                          heavy=0.35, tempo=0.55, screen=0.35, motion=0.55),
     "Wing-T":        dict(pass_lean=-0.80, deep=0.35, outside=0.55, qb_run=0.20,
-                          heavy=0.85, tempo=0.30, screen=0.10),
+                          heavy=0.85, tempo=0.30, screen=0.10, motion=0.85),
     "Flexbone":      dict(pass_lean=-1.00, deep=0.80, outside=0.50, qb_run=0.90,
-                          heavy=0.20, tempo=0.35, screen=0.05),
+                          heavy=0.20, tempo=0.35, screen=0.05, motion=0.80),
+    # Outside zone, bootlegs and play-action shots, with motion on almost every snap
+    "Wide Zone":     dict(pass_lean=-0.05, deep=0.20, outside=0.85, qb_run=0.05,
+                          heavy=0.55, tempo=0.40, screen=0.45, motion=0.92),
 }
 
 # How much each system splits carries between backs (0 = one bell-cow,
@@ -49,7 +53,7 @@ OFFENSIVE_SCHEMES = {
 SCHEME_COMMITTEE = {
     "West Coast": 0.50, "Air Coryell": 0.40, "Air Raid": 0.60, "Run and Shoot": 0.55,
     "Spread Option": 0.50, "Power Run": 0.22, "Zone Run": 0.50, "Pro Style": 0.38,
-    "Pistol": 0.40, "Wing-T": 0.70, "Flexbone": 0.80,
+    "Pistol": 0.40, "Wing-T": 0.70, "Flexbone": 0.80, "Wide Zone": 0.50,
 }
 
 # Concept mix by scheme: play-action rate, RPO rate, appetite for trick plays
@@ -65,6 +69,7 @@ SCHEME_CONCEPTS = {
     "Pistol":        dict(play_action=0.60, rpo=0.60, trick=0.40),
     "Wing-T":        dict(play_action=0.80, rpo=0.05, trick=0.60),
     "Flexbone":      dict(play_action=0.85, rpo=0.05, trick=0.45),
+    "Wide Zone":     dict(play_action=0.85, rpo=0.10, trick=0.40),
 }
 
 # Situational play-calling by system (each coordinator varies around these):
@@ -83,6 +88,7 @@ SCHEME_SITUATIONAL = {
     "Pistol":        dict(sit_early=-0.02, sit_short=-0.06, sit_rz=-0.03, sit_shot=0.45, sit_long=0.30),
     "Wing-T":        dict(sit_early=-0.06, sit_short=-0.15, sit_rz=-0.10, sit_shot=0.55, sit_long=0.30),
     "Flexbone":      dict(sit_early=-0.08, sit_short=-0.18, sit_rz=-0.12, sit_shot=0.70, sit_long=0.15),
+    "Wide Zone":     dict(sit_early=-0.02, sit_short=-0.06, sit_rz=-0.03, sit_shot=0.55, sit_long=0.35),
 }
 SIT_KEYS = ("sit_early", "sit_short", "sit_rz", "sit_shot", "sit_long")
 
@@ -100,7 +106,16 @@ SCHEME_EXECUTION = {
     "Zone Run": dict(short_comp=0.0, short_yac=1.0, run_edge=0.05),
     "Pistol": dict(short_comp=0.0, short_yac=1.0, run_edge=0.06),
     "Spread Option": dict(short_comp=0.01, short_yac=1.05, run_edge=0.05),
+    "Wide Zone": dict(short_comp=0.01, short_yac=1.10, run_edge=0.04),
 }
+
+
+def motion_tendency(coach):
+    """How often his offense uses pre-snap motion (filled in from his system for older saves)."""
+    t = coach.tendencies
+    if "motion" not in t:
+        t["motion"] = OFFENSIVE_SCHEMES.get(coach.off_scheme, {}).get("motion", 0.5)
+    return t["motion"]
 
 
 def sit_tendency(coach, key):
@@ -125,6 +140,8 @@ DEFENSIVE_SCHEMES = {
     "Press Man":     dict(blitz=0.30, zone=0.20, front="3-4", two_high=0.35),
     "Two-High Match": dict(blitz=0.15, zone=0.70, front="3-4", two_high=0.85),
     "Zone Blitz":    dict(blitz=0.45, zone=0.65, front="3-4", two_high=0.40),
+    # Three safeties on the field against everything but heavy sets; a five-man line against the run
+    "Three-High":    dict(blitz=0.25, zone=0.75, front="3-4", two_high=0.80),
 }
 
 COACH_RATINGS = ["offense", "defense", "development", "motivation",

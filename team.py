@@ -5,7 +5,7 @@ import random
 
 from ratings import (POSITIONS, ROSTER_TEMPLATE, ROSTER_MINIMUM, POSITION_VALUE,
                      stars_for)
-from coach import Coach
+from coach import Coach, motion_tendency
 from position_fit import STARTERS, RETURN_SLOTS
 import packages
 from packages import PACKAGE_SLOTS
@@ -45,6 +45,9 @@ TACTIC_SLIDERS = {
                      "Option and designed quarterback runs"),
     "screens":      ("Rarely  ◄  Screen Game  ►  Often",
                      "Screens to backs and receivers"),
+    "motion":       ("Rarely  ◄  Pre-Snap Motion  ►  Often",
+                     "Jet, orbit and across motion and shifts: help the quarterback read the coverage "
+                     "and set up jet sweeps and screens, at a small risk of illegal-motion flags"),
     "blitz":        ("Coverage  ◄  Blitz Rate  ►  Pressure",
                      "Sending extra rushers"),
     "coverage":     ("Man  ◄  Coverage  ►  Zone",
@@ -457,6 +460,7 @@ class Team:
             "play_action": t.get("play_action", 0.45),
             "rpo": t.get("rpo", 0.30),
             "trick": t.get("trick", 0.35),
+            "motion": motion_tendency(c),
         }
         # Mobile quarterbacks get more designed runs if the coach adapts
         qbs = self.lineup("QB", 1)
@@ -480,11 +484,12 @@ class Team:
             plan["play_action"] += (tac.get("play_action", 50) - 50) / 50.0 * 0.45
             plan["rpo"] += (tac.get("play_action", 50) - 50) / 50.0 * 0.35
             plan["trick"] += (tac.get("trickery", 50) - 50) / 50.0 * 0.6
+            plan["motion"] += (tac.get("motion", 50) - 50) / 50.0 * 0.5
 
         plan["pass_rate"] = max(0.28, min(0.74, plan["pass_rate"]))
         plan["deep"] = max(-1.0, min(1.0, plan["deep"]))
         for k in ("outside", "qb_run", "heavy", "tempo", "screen", "aggression",
-                  "blitz", "zone", "two_high", "committee", "play_action", "rpo", "trick"):
+                  "blitz", "zone", "two_high", "committee", "play_action", "rpo", "trick", "motion"):
             plan[k] = max(0.0, min(1.0, plan[k]))
         return plan
 

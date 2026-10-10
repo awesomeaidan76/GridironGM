@@ -3,7 +3,7 @@ Offensive scheme identity check: does every system play the way it should?
 
 Puts each offensive system on a league-average team in turn and plays it
 against random opponents, then prints a stat profile per system: pass rate,
-depth of target, screens, play-action, RPO, shotgun, personnel, QB runs,
+depth of target, screens, play-action, RPO, shotgun, personnel, QB runs, motion,
 explosive plays, EPA per play and points.
 
     python tools/schemes.py [games_per_scheme] [seed]
@@ -62,6 +62,7 @@ def profile(games=120, seed=1):
             "12+%": 100 * sum(v for k, v in pers.items() if 5 - int(k[0]) - int(k[1]) <= 2) / ptot,
             "10%": 100 * pers.get("10", 0) / ptot,
             "QBrush%": 100 * P["QB_rush"] / max(1, T["rush_att"]),
+            "mot%": 100 * T["motion_snaps"] / max(1, T["plays"]),
             "EPA/pl": T["epa"] / max(1, T["epa_plays"]),
             "ppg": pts / games,
             "plays": plays / games,
