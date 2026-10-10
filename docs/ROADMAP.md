@@ -70,8 +70,10 @@ The owner set the order of this work in October 2026.
   and defensive game plans (coverage-beater concepts, matchups, run side, tendency reads and breaks),
   series and halftime adjustments, injury re-plans, tempo against a tired front, and the per-league
   difficulty setting (Rookie / Pro / All-Pro / Hall of Fame) that sharpens CPU staffs' decisions only.
-- 🔜 **CPU AI, front office**: trade valuation that can't be fleeced, rating fog for CPU evaluations,
-  re-signing and cap planning, CPU development choices, season objectives; the difficulty dial reaches it.
+- ✅ **CPU AI, front office**: trade values on the draft-pick scale (stars worth far more than starters),
+  packages judged by what they add to the roster, scouting fog on potential, re-signing by priority within
+  a cap plan, early extensions for the young core, priorities and the GM hot seat that change behaviour,
+  CPU training focus and upside-based playing time; the difficulty dial reaches all of it.
 - 🔜 **CPU AI, substitutions**: rotation identity per coach, resting starters, load and injury management.
 - 🔜 **Game-day inactives** (48 of 53).
 - 💡 The rest of the depth chart GUI ideas: a game-day preview of who takes the field in each
@@ -105,8 +107,10 @@ The owner set the order of this work in October 2026.
   - desktop-first density.
 
 ## CPU front offices: further ideas
-- Contract structures by GM: front-loading, back-loading, void years, and extending a star early
-  before the market resets.
+- Contract structures by GM: front-loading, back-loading, void years.
+- A free-agent bidding market (clubs submit offers, the player chooses), and CPU cap casualties that
+  weigh dead money.
+- Goal-driven CPU-to-CPU trades (a contender whose QB is hurt calls the clubs holding one).
 - Trade grudges and partners: GMs remember who fleeced them.
 - An empirical draft-pick value chart fitted from the league's own draft history, which each GM
   blends with the "market" chart according to his analytics and risk traits.

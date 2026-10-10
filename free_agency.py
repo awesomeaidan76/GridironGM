@@ -130,42 +130,48 @@ def player_value(p):
 # ── AI roster management ──────────────────────────────────────────────────────
 
 def ai_resign(lg, team):
-    """AI decides which expiring contracts to keep."""
+    """AI decides which expiring contracts to keep (the decisions are front_office.resign_choices)."""
+    keep, walked = fo.resign_choices(lg, team)
     kept = []
+    for p, ask, yrs in keep:
+        bonus, guar = nego.default_structure(p, int(ask), yrs)
+        p.contract = nego.make(int(ask), yrs, lg.year, bonus, guar)
+        p.on_rookie_deal = False
+        kept.append(p)
+        if p.ca >= 145:
+            lg.add_transaction(f"{team.abbr} re-signed {p.position} {p.name}")
+    g = fo.gm_of(team)
+    mode = fo.plan_of(team)
     for p in list(team.roster):
         if p.contract and p.contract["years"] <= 0:
-            at_pos = sorted(team.players_at(p.position), key=lambda x: -player_value(x))
-            idx = at_pos.index(p)
-            keep_depth = max(1, ROSTER_TEMPLATE[p.position] - 1)
-            g = fo.gm_of(team)
-            loyal = g.t("loyalty") if g else 0.5
-            mode = fo.plan_of(team)
-            max_age = 32 + (1 if loyal >= 0.75 else 0) - (3 if mode in ("Rebuild", "Tank") and p.ovr < 84 else 0)
-            wants = idx < keep_depth and (p.age <= max_age or p.position in ("QB", "K", "P") and p.age <= 37)
-            if p.ca < 80:
-                wants = False
-            if mode == "Cap Reset" and p.ovr < 80:
-                wants = False
-            ask = asking_salary(p, lg.salary_cap, 1.0) * random.uniform(0.9, 1.02)
-            space = team.cap_space(lg.salary_cap) + p.salary
-            share = 0.6 if g is None else 0.45 + 0.30 * (1.0 - g.t("cap_disc"))
-            if wants and ask <= space * share and random.random() < 0.70 + 0.30 * loyal:
-                yrs = contract_length(p)
-                bonus, guar = nego.default_structure(p, int(ask), yrs)
-                p.contract = nego.make(int(ask), yrs, lg.year, bonus, guar)
-                p.on_rookie_deal = False
-                kept.append(p)
-                if p.ca >= 145:
-                    lg.add_transaction(f"{team.abbr} re-signed {p.position} {p.name}")
-            else:
-                team.remove_player(p)
-                p.contract = None
-                p.fa_origin = (team.abbr, lg.year)
-                lg.free_agents.append(p)
-                if wants is False and p.ovr >= 82 and g is not None and mode in fo.SELLERS:
-                    lg.add_news("Front Office", f"The {fo.describe(team)} {team.name} let {p.position} "
-                                                f"{p.name} ({p.age}) walk in free agency.", team.abbr)
+            team.remove_player(p)
+            p.contract = None
+            p.fa_origin = (team.abbr, lg.year)
+            lg.free_agents.append(p)
+            if p in walked and p.ovr >= 80:
+                lg.add_news("Free Agency", f"{p.position} {p.name} ({p.age}) turns down the {team.name} "
+                                           f"and will test free agency.", team.abbr)
+            elif p.ovr >= 82 and g is not None and mode in fo.SELLERS:
+                lg.add_news("Front Office", f"The {fo.describe(team)} {team.name} let {p.position} "
+                                            f"{p.name} ({p.age}) walk in free agency.", team.abbr)
     return kept
+
+
+def ai_extensions(lg, team):
+    """Early extensions for a CPU club's young core (the choices are front_office.extension_targets)."""
+    done = []
+    for p, apy, years in fo.extension_targets(lg, team):
+        bonus, guar = nego.default_structure(p, apy, years)
+        p.contract = nego.make(apy, years, lg.year, bonus, guar)
+        p.on_rookie_deal = False
+        p.morale = min(100, p.morale + 6)
+        done.append(p)
+        lg.add_transaction(f"{team.abbr} extended {p.position} {p.name} ({years} yr, {fmt_money(apy)}/yr)")
+        if p.ovr >= 82 or p.position == "QB":
+            lg.add_news("Contract", f"{team.full_name} lock up {p.position} {p.name} ({p.age}) with a "
+                                    f"{years}-year extension ({fmt_money(apy)}/yr) before he reaches the market.",
+                        team.abbr)
+    return done
 
 
 def ai_free_agency_wave(lg, max_signings=3):
@@ -209,6 +215,8 @@ def ai_free_agency_wave(lg, max_signings=3):
             cands = [p for p in lg.free_agents if p.position == pos and p.ca > bar + 3]
             if mode in ("Rebuild", "Tank", "Youth Movement", "Cap Reset"):
                 cands = [p for p in cands if p.age <= 28 or p.ovr < 72]
+            if pos == "QB" and "Develop the young QB" in fo.focus_of(team):
+                cands = [p for p in cands if p.age < 27 or p.ovr < 70]     # nobody to block the kid
             if g is not None and g.t("analytics") >= 0.7 and wave <= 1:
                 # protect compensatory picks: skip mid-priced veterans who left another club
                 cands = [p for p in cands if not (p.fa_origin and p.fa_origin[0] != team.abbr

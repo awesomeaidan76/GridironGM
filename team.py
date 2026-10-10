@@ -190,7 +190,8 @@ class Team:
             if yt is not None:
                 boost += (yt - 0.5) * 4.0          # the head coach's trust in young players
             if boost and p.age <= 24:
-                v += boost
+                # the reps go to the kids with real upside, not to any young player
+                v += boost * min(1.5, max(0.25, (p.pa - p.ca) / 15.0))
         return v
 
     def _listed(self, slot):

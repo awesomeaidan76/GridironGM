@@ -16,6 +16,8 @@ stay UI-free (see `docs/ARCHITECTURE.md`).
   then a decade-by-decade report including front-office plans, GM styles and firings and the MVP/OPOY
   spread; `--report file.jsonl` re-prints it). Run two seeds in parallel.
 - Expected-points table refit (after big engine changes): `python tools/fit_ep.py`.
+- Front-office AI checks (lopsided trade offers, fair swaps, a season of re-signings and payrolls):
+  `python tools/fo_probe.py [seed] [--iq 0.5] [--season]`.
 - Offensive system identity (pass rate, depth, personnel, shotgun, QB runs, motion per system): `python tools/schemes.py`.
 - Check several calibrate seeds before trusting a change: league talent landscapes vary a lot.
 

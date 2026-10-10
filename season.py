@@ -33,7 +33,6 @@ from schedule import build_schedule
 from settings import settings
 from stats import merge, fantasy_like_value, summary_line
 from team import TACTIC_SLIDERS
-from trades import ai_trade_market
 
 PHASES = ["regular", "playoffs", "season_end", "resign", "draft", "free_agency", "preseason"]
 
@@ -147,6 +146,7 @@ def start_new_season(lg, first=False):
         user.tactics = default_tactics()
     staff_mod.ensure_league(lg)
     fo.ensure(lg)
+    fo.offseason_training(lg)
     fo.weekly_depth_all(lg, news=not first)
     if not first:
         for team in lg.teams.values():
@@ -689,7 +689,7 @@ def _coaching_carousel(lg):
             p_fire = 0.45
         elif rec.pct < 0.50 and c.team_seasons >= 5 and recent_playoffs == 0:
             p_fire = 0.30
-        p_fire *= hot * fo.owner_coach_patience(team)
+        p_fire *= hot * fo.owner_coach_patience(team, lg.year)
         g = fo.gm_of(team)
         new_gm = g is not None and g.seasons == 0 and c.team_seasons >= 1 and random.random() < 0.30 * hot
         if new_gm:
@@ -880,6 +880,7 @@ def finalize_resign(lg):
                     lg.add_transaction(f"{p.position} {p.name} left {team.abbr} in free agency")
         else:
             fa.ai_resign(lg, team)
+            fa.ai_extensions(lg, team)
     lg.expiring = []
 
 

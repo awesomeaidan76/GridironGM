@@ -327,6 +327,7 @@ class Player:
     base_weight = None      # his weight when that conversion started (conditioning limit)
     position_history = None # [(season, old, new)] permanent position changes
     train_pos = None        # a second position he practises during the week
+    training_focus = None   # attribute group his training targets (None = Balanced)
 
     def __init__(self, name, position, age):
         self.id = next_player_id()

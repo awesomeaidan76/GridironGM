@@ -381,6 +381,7 @@ def ensure(lg):
             t.gm = g
         if getattr(t, "plan", None) is None:
             t.plan = choose_plan(lg, t, initial=True)
+            t.youth_boost = PLANS[t.plan["mode"]]["kids"]
 
 
 def _roll_power(o):
@@ -449,7 +450,20 @@ def assess(lg, team, midseason=False):
     if lg.phase in ("regular", "playoffs"):
         committed = sum(p.salary for p in team.roster if p.contract and p.contract.get("years", 0) >= 2)
     return dict(rank=rank + 1, s=s, w=w, c=c, core_age=core_age, young=young, stars=stars,
-                qb_status=qb_status, qb=qb, cap_load=committed / cap if cap else 0.0)
+                qb_status=qb_status, qb=qb, cap_load=committed / cap if cap else 0.0,
+                hot=hot_seat(lg, team))
+
+
+def hot_seat(lg, team):
+    """0-1: how close the GM is to being fired (the owner's bar against the last three seasons)."""
+    g = gm_of(team)
+    if g is None or g.seasons < 2 or not team.history:
+        return 0.0
+    o = owner_traits(team.owner)
+    gap = 0.50 + (o.ambition - 10) * 0.012 - _recent_pct(team, 3)
+    if plan_of(team) in ("Rebuild", "Tank", "Youth Movement") and g.seasons <= 4:
+        gap *= 0.5                       # the owner signed off on the rebuild
+    return _clamp(gap * 4.0 * (1.45 - o.patience * 0.045))
 
 
 def _utilities(lg, team, a):
@@ -477,6 +491,12 @@ def _utilities(lg, team, a):
         "Cap Reset": 7.0 * (a["cap_load"] - 0.96) - 0.25 - 1.5 * max(0.0, c - 0.60)
         + 0.40 * (gt("cap_disc") - 0.5),
     }
+    # A GM about to lose his job wants wins now, and won't start a teardown
+    hot = a.get("hot", 0.0)
+    for k in ("All-In", "Contend", "Playoff Push"):
+        u[k] += 0.30 * hot
+    for k in ("Rebuild", "Tank", "Youth Movement"):
+        u[k] -= 0.40 * hot
     return u
 
 
@@ -495,7 +515,26 @@ def _focus(a, mode):
         out.append("Window is closing")
     if a["young"] >= 7:
         out.append("Lock up the young core")
+    if a.get("hot", 0.0) >= 0.5:
+        out.append("On the hot seat")
     return out
+
+
+# What each objective changes (read by the valuation below, the draft board, re-signing and
+# free agency): plain numbers so the Front Offices screen and the port can show and copy them.
+FOCUS_EFFECTS = {
+    "Find a franchise QB": "Pays up for quarterbacks in trades and on draft day.",
+    "Groom the QB's successor": "Drafts and trades for a young quarterback to learn behind the starter.",
+    "Develop the young QB": "Won't spend on a veteran quarterback who would block the kid.",
+    "Cap is tight": "Keeps money back in re-signing and free agency.",
+    "Window is closing": "Pays more for proven veterans and less for future picks.",
+    "Lock up the young core": "Extends young core players a year early, before their price rises.",
+    "On the hot seat": "Trades future picks for help now and won't start a rebuild.",
+}
+
+
+def focus_of(team):
+    return (getattr(team, "plan", None) or {}).get("focus", ())
 
 
 def _reason(lg, team, a, mode):
@@ -525,8 +564,9 @@ def choose_plan(lg, team, initial=False, midseason=False):
     a = assess(lg, team, midseason=midseason)
     u = _utilities(lg, team, a)
     cur = getattr(team, "plan", None)
+    sd = 0.10 * fx()["read"]                 # a sharper front office misreads its own roster less
     for k in u:
-        u[k] += random.gauss(0, 0.10)
+        u[k] += random.gauss(0, sd)
     if cur and not initial:
         held = cur["mode"]
         if held in u:
@@ -606,13 +646,129 @@ def position_value(lg, team, pos):
     return v
 
 
+# ── The difficulty dial and what a front office can see ──────────────────────
+# The league's `cpu_intelligence` setting (gameday.LEVELS: Rookie 0.5, Pro 1.0 = realistic,
+# Hall of Fame 2.0) sharpens or dulls every CPU front office the way it does their game-day
+# staffs: a GM decides as if his judgement were closer to 20 (or lower), his scouts read
+# potential as if the department were better, and his deals respect roster economics more
+# (or less). It never changes a player's ratings. The user's club has no GM, so none of
+# this applies to it.
+
+def fx():
+    """The difficulty dial as plain numbers (see gameday.effects)."""
+    import gameday
+    return gameday.effects(settings.get("cpu_intelligence", gameday.DEFAULT_IQ))
+
+
+def judgement(g):
+    """A GM's judgement as he uses it, sharpened or dulled by the difficulty dial."""
+    import gameday
+    return gameday.sharpen(g.judgement, fx())
+
+
+def smarts():
+    """How fully a front office applies roster economics in a deal (1.0 at Pro)."""
+    return fx()["plan"]
+
+
 def _noise(g, pid, year):
     """His judgement: a stable personal error on each player each season."""
-    sd = (20 - g.judgement) * 0.011
+    sd = (20 - judgement(g)) * 0.011
     if sd <= 0:
         return 1.0
     r = random.Random(zlib.crc32(f"{g.name}:{pid}:{year}".encode()))
     return max(0.6, 1.0 + r.gauss(0, sd))
+
+
+def seen_pa(lg, team, p):
+    """
+    The potential (CA scale) a club believes a player has. A club knows its own players;
+    for everyone else it has its scouts' range (the same one the user sees, read through
+    this club's scouting department) and its own lean within it. Ratings now are public.
+    """
+    if team is None or gm_of(team) is None or p.team == team.abbr:
+        return p.pa
+    if p.years_to_peak() <= 0 and not p.converted_from:
+        return p.pa
+    import gameday
+    sc = gameday.sharpen(getattr(team, "scouting", 10), fx())
+    lo, hi = p.scouted_pa_range(sc)
+    r = random.Random(zlib.crc32(f"pa:{team.abbr}:{p.id}:{lg.year}".encode()))
+    return max(p.ca, (lo + hi) / 2.0 + r.gauss(0, (hi - lo) * 0.15))
+
+
+# ── Packages: what a deal does to the roster ─────────────────────────────────
+# A player is only worth what he adds to the roster he joins: a third quarterback or a
+# seventh corner earns a club little, however good he is. Many good players are not one
+# star (each extra piece in a package counts for less), and a club trying to win now
+# hates a deal that weakens this season's lineup with nobody to step in.
+
+STARTERS = {"WR": 3, "OT": 2, "IOL": 3, "DT": 2, "EDGE": 2, "LB": 3, "CB": 3, "S": 2}
+ROTATION = {"QB": 0, "RB": 1, "FB": 0, "WR": 1, "TE": 1, "OT": 1, "IOL": 1, "DT": 1, "EDGE": 1,
+            "LB": 0, "CB": 1, "S": 1, "K": 0, "P": 0}
+ROLE_SHARE = {"starter": 1.0, "rotation": 0.65, "depth": 0.30, "prospect": 0.55}
+EXTRA_PIECE = 0.20        # each extra piece in a package is worth this much less than the one before
+WIN_NOW = {"All-In": 1.0, "Contend": 0.85, "Last Dance": 1.0, "Playoff Push": 0.6, "Stay the Course": 0.4,
+           "Retool": 0.2, "Youth Movement": 0.1, "Rebuild": 0.0, "Tank": 0.0, "Cap Reset": 0.1}
+LINEUP_WEIGHT = 0.5       # share of this season's lost lineup value a full contender adds to the price
+
+
+def _after(team, pos, incoming, outgoing):
+    """The club's players at a position after the deal, best first."""
+    out = {id(p) for p in outgoing}
+    group = [p for p in team.players_at(pos) if id(p) not in out]
+    group += [p for p in incoming if not isinstance(p, tuple) and p.position == pos]
+    return sorted(group, key=lambda p: -p.ca)
+
+
+def role(lg, team, p, incoming=(), outgoing=()):
+    """What a player would be on this club after the deal: starter, rotation, depth or prospect."""
+    group = _after(team, p.position, incoming, outgoing)
+    i = group.index(p) if p in group else len(group)
+    n = STARTERS.get(p.position, 1)
+    if i < n:
+        return "starter"
+    if i < n + ROTATION.get(p.position, 0):
+        return "rotation"
+    if p.age <= 24 and seen_pa(lg, team, p) - p.ca >= 12:
+        return "prospect"
+    return "depth"
+
+
+def package_in(lg, team, incoming, outgoing, value):
+    """
+    What a package is worth to the club receiving it: each player by the role he would have,
+    the biggest piece first and every extra piece for less. value(asset) is the club's own
+    per-asset valuation (trades.trade_value through its eyes).
+    """
+    k = min(1.0, smarts())
+    vals = []
+    for a in incoming:
+        v = value(a)
+        if not isinstance(a, tuple):
+            share = ROLE_SHARE[role(lg, team, a, incoming, outgoing)]
+            v *= 1.0 - (1.0 - share) * k
+        vals.append(v)
+    vals.sort(reverse=True)
+    step = EXTRA_PIECE * smarts()
+    return sum(v * max(0.4, 1.0 - step * i) for i, v in enumerate(vals))
+
+
+def lineup_loss(lg, team, incoming, outgoing, talent):
+    """
+    How much weaker this season's starting lineup gets (in value units), weighted by how much
+    the club is trying to win now. talent(p) is a player's value as a player today.
+    """
+    w = WIN_NOW.get(plan_of(team), 0.4) * LINEUP_WEIGHT * smarts()
+    if w <= 0:
+        return 0.0
+    loss = 0.0
+    for pos in {p.position for p in outgoing if not isinstance(p, tuple)}:
+        n = STARTERS.get(pos, 1)
+        before = sorted(team.players_at(pos), key=lambda p: -p.ca)[:n]
+        after = _after(team, pos, incoming, outgoing)[:n]
+        loss += max(0.0, sum(talent(p) for p in before) - sum(talent(p) for p in after))
+    return loss * w
 
 
 def player_mult(lg, team, p):
@@ -637,8 +793,15 @@ def player_mult(lg, team, p):
         m *= 1.0 + (g.t("loyalty") - 0.5) * 0.40
         if team.power == "Owner-run" and p.reputation >= 65:
             m *= 1.30                      # the owner won't let a fan favourite go cheaply
-    if p.position == "QB" and "Find a franchise QB" in (team.plan or {}).get("focus", ()) and p.ovr >= 76:
+    focus = focus_of(team)
+    if p.position == "QB" and "Find a franchise QB" in focus and p.ovr >= 76:
         m *= 1.30
+    if p.position == "QB" and "Groom the QB's successor" in focus and p.age <= 25 and p.team != team.abbr:
+        m *= 1.15
+    if p.position == "QB" and "Develop the young QB" in focus and p.age >= 27 and p.team != team.abbr:
+        m *= 0.80
+    if ("Window is closing" in focus or "On the hot seat" in focus) and p.age >= 27 and p.ovr >= 78:
+        m *= 1.08
     if p.is_injured:
         m *= 1.0 + (g.t("risk") - 0.5) * 0.4
     if team.power == "Coach-led":
@@ -656,6 +819,11 @@ def pick_mult(lg, team, year):
     if g is None:
         return 1.0
     m = PLANS[plan_of(team)]["pick"] * (1.0 + (g.t("patience") - 0.5) * 0.40)
+    focus = focus_of(team)
+    if "Window is closing" in focus:
+        m *= 0.90
+    if "On the hot seat" in focus:
+        m *= 0.85
     # A GM values his own far-off picks more: nobody knows where he'll be in two years
     if year >= lg.year + 2:
         m *= 1.0 + (g.t("patience") - 0.5) * 0.15
@@ -684,6 +852,8 @@ def spend_factor(team):
         f *= 1.0 + (g.t("stars") - 0.5) * 0.30 - (g.t("cap_disc") - 0.5) * 0.30
     if team.power == "Owner-run":
         f *= 1.10
+    if "Cap is tight" in focus_of(team):
+        f *= 0.85
     return max(0.25, min(2.0, f))
 
 
@@ -693,6 +863,201 @@ def cap_reserve(lg, team):
     if g is None:
         return 0
     return int(lg.salary_cap * max(0.0, (g.t("cap_disc") - 0.35) * 0.05))
+
+
+# ── Contracts: re-signing, extensions and the cap plan ───────────────────────
+# At the end of the re-signing window each CPU club works out what it can spend: next
+# season's commitments (the deals that are ending don't count), a reserve for its draft
+# picks and the minimum bodies it must still sign, and a share of the cap its plan is
+# willing to fill. It then keeps its expiring players in order of how much they matter to it,
+# not in roster order, while the money lasts; a star it badly wants can stretch the budget up
+# to the hard cap. Players can say no too: an ambitious player on an unattractive club may
+# test the market. Young core players entering the last year of a deal get extended early,
+# before a big season raises their price (more often when the plan says "Lock up the young
+# core", and more often for sharper GMs).
+
+CAP_USE = {"All-In": 1.00, "Last Dance": 1.00, "Contend": 0.97, "Playoff Push": 0.95,
+           "Stay the Course": 0.93, "Retool": 0.90, "Youth Movement": 0.87, "Rebuild": 0.85,
+           "Tank": 0.80, "Cap Reset": 0.80}
+RESIGN_AGE = 3            # years past his position's usual prime a club will still re-sign a player
+RESIGN_FLOOR = 48         # below this OVR a club lets him go and signs a cheaper body
+CORE_OVR = 84             # a core player a club will stretch its budget for
+EXTEND_AGE = 27           # extensions go to players this age or younger...
+EXTEND_OVR = 80           # ...rated this high (quarterbacks EXTEND_QB)
+EXTEND_QB = 76
+
+
+def rookie_pool(lg, team):
+    """What this club's picks in the next draft will cost."""
+    from contracts import rookie_salary
+    import roster_rules as rr
+    y = rr.next_draft_year(lg)
+    return sum(rookie_salary(rr.projected_pick(lg, yr, r, o), lg.salary_cap)
+               for yr, r, o in rr.tradable_picks(lg, team.abbr) if yr == y)
+
+
+def cap_plan(lg, team, leaving=()):
+    """
+    The club's money for next season: (soft budget for new deals, hard room under the cap).
+    leaving: players whose deals are ending (their salaries don't count).
+    """
+    from contracts import min_salary
+    from ratings import ROSTER_MINIMUM
+    cap = lg.salary_cap
+    gone = {p.id for p in leaving}
+    committed = sum(p.salary for p in team.roster if p.id not in gone) + team.dead_cap
+    counts = {}
+    for p in team.roster:
+        if p.id not in gone:
+            counts[p.position] = counts.get(p.position, 0) + 1
+    bodies = sum(max(0, n - counts.get(pos, 0)) for pos, n in ROSTER_MINIMUM.items())
+    reserve = rookie_pool(lg, team) + bodies * min_salary(cap) + cap_reserve(lg, team)
+    hard = cap - committed - rookie_pool(lg, team)
+    soft = cap * CAP_USE.get(plan_of(team), 0.93) - committed - reserve
+    if "Cap is tight" in focus_of(team):
+        soft -= cap * 0.03
+    return soft, hard
+
+
+def resign_wanted(lg, team, p, rank):
+    """Does the club want this expiring player back? rank: his place at his position (0 = best)."""
+    from ratings import AGE_CURVES, ROSTER_TEMPLATE
+    prime_end = AGE_CURVES[p.position][1]
+    g = gm_of(team)
+    mode = plan_of(team)
+    loyal = g.t("loyalty") if g else 0.5
+    max_age = prime_end + RESIGN_AGE + (1 if loyal >= 0.75 else 0)
+    if mode in ("Rebuild", "Tank") and p.ovr < CORE_OVR:
+        max_age = min(max_age, prime_end)
+    if p.age > max_age and not (p.ovr >= 82 and p.age <= prime_end + 5 and mode not in SELLERS):
+        return False
+    if rank >= max(1, ROSTER_TEMPLATE[p.position] - 1) or p.ovr < RESIGN_FLOOR:
+        return False
+    if mode == "Cap Reset" and p.ovr < 80:
+        return False
+    return True
+
+
+def tests_market(lg, team, p, rng=random):
+    """Does the player turn the club down and test free agency?"""
+    from free_agency import team_appeal
+    amb = p.hidden.get("ambition", 50) / 100.0
+    chance = 0.04 + max(0.0, 1.1 - team_appeal(lg, team, p)) * 0.5 * amb
+    if p.morale >= 75:
+        chance *= 0.6
+    g = gm_of(team)
+    if g is not None:
+        chance *= 1.3 - g.t("loyalty") * 0.6       # loyal GMs find the extra dollar to keep him
+    return rng.random() < min(0.30, chance)
+
+
+def resign_choices(lg, team, rng=random):
+    """
+    Which expiring players this club keeps: [(player, salary, years)], plus the ones it wanted
+    who turned it down, in the order it made its calls.
+    """
+    from contracts import asking_salary, contract_length
+    from free_agency import player_value
+    expiring = [p for p in team.roster if p.contract and p.contract["years"] <= 0]
+    if not expiring:
+        return [], []
+    soft, hard = cap_plan(lg, team, leaving=expiring)
+    wanted = []
+    for p in expiring:
+        group = sorted(team.players_at(p.position, include_inactive=True), key=lambda x: -player_value(x))
+        if resign_wanted(lg, team, p, group.index(p)):
+            wanted.append(p)
+    import trades
+    wanted.sort(key=lambda p: -trades.trade_value(p, lg, team))
+    keep, walked = [], []
+    for p in wanted:
+        ask = int(asking_salary(p, lg.salary_cap, 1.0) * rng.uniform(0.92, 1.03))
+        # A star, or a cheap starter, is worth stretching the budget for (up to the hard cap)
+        starter = sorted(team.players_at(p.position, include_inactive=True),
+                         key=lambda x: -x.ca).index(p) < STARTERS.get(p.position, 1)
+        core = p.ovr >= CORE_OVR or (p.position == "QB" and p.ovr >= 78) or \
+            (starter and ask <= lg.salary_cap * 0.04)
+        room = hard if core else soft
+        if ask > room:
+            continue
+        if tests_market(lg, team, p, rng):
+            walked.append(p)
+            continue
+        keep.append((p, ask, contract_length(p)))
+        soft -= ask
+        hard -= ask
+    return keep, walked
+
+
+def extension_targets(lg, team, rng=random):
+    """Young core players in the last year of their deals this club extends now: [(player, apy, years)]."""
+    from contracts import asking_salary, contract_length
+    g = gm_of(team)
+    if g is None or plan_of(team) == "Tank":
+        return []
+    base = 0.30 + (0.30 if "Lock up the young core" in focus_of(team) else 0.0) + (judgement(g) - 10) / 40.0
+    out = []
+    soft, _ = cap_plan(lg, team)
+    cands = [p for p in team.roster if p.contract and p.contract["years"] == 1 and not p.holdout
+             and p.contract.get("signed") != lg.year
+             and p.age <= EXTEND_AGE and p.ovr >= (EXTEND_QB if p.position == "QB" else EXTEND_OVR)]
+    if plan_of(team) in ("Rebuild", "Youth Movement"):
+        cands = [p for p in cands if p.age <= 25]
+    import trades
+    for p in sorted(cands, key=lambda p: -trades.trade_value(p, lg, team)):
+        if rng.random() > base:
+            continue
+        # his agent's price for a re-signing now (a happy player gives a hometown discount)
+        apy = int(asking_salary(p, lg.salary_cap) * (1.0 - (p.morale - 60) / 400.0) * rng.uniform(0.97, 1.05))
+        years = max(3, min(5, contract_length(p) + 1))
+        raise_ = apy - p.salary
+        if raise_ > soft:
+            continue
+        out.append((p, apy, years))
+        soft -= raise_
+    return out
+
+
+# ── Development choices ──────────────────────────────────────────────────────
+# Before camp every CPU staff sets a training focus for each player, as the user can for his
+# own: a young player works on the most important part of his game where he is weakest; a
+# veteran past his prime works on his body to slow the loss of speed. A good teaching staff
+# (and a sharper difficulty) gets the call right more often; a poor one guesses. Playing time
+# for young players goes to the ones with real upside (team.depth_score).
+
+def training_choice(lg, team, p, rng=random):
+    """The staff's training focus for one player (None = Balanced)."""
+    from ratings import POSITION_DISPLAY_GROUPS, POSITION_WEIGHTS, ATTRIBUTES, AGE_CURVES
+    import gameday
+    import staff
+    groups = list(POSITION_DISPLAY_GROUPS[p.position])
+    quality = gameday.sharpen(staff.dev_rating(team, p.position), fx()) / 20.0
+    if rng.random() > 0.35 + 0.6 * quality:
+        return rng.choice([None] + groups)                 # the staff's guess
+    if p.age > AGE_CURVES[p.position][1]:
+        return "Physical"                                  # keep the legs
+    w = POSITION_WEIGHTS[p.position]
+    best, best_score = None, 0.0
+    for g in groups:
+        attrs = [a for a in p.attrs if ATTRIBUTES[a][2] == g and w.get(a, 0) > 0]
+        if not attrs:
+            continue
+        weight = sum(w[a] for a in attrs)
+        avg = sum(p.attrs[a] * w[a] for a in attrs) / weight
+        score = weight * (100 - avg)
+        if score > best_score:
+            best, best_score = g, score
+    return best
+
+
+def offseason_training(lg):
+    """Every CPU staff sets its players' training focus for the coming season."""
+    for t in lg.teams.values():
+        if t.abbr == lg.user_abbr:
+            continue
+        r = random.Random(zlib.crc32(f"train:{t.abbr}:{lg.year}".encode()))
+        for p in t.roster:
+            p.training_focus = training_choice(lg, t, p, r)
 
 
 # ── Plan-aware draft board ───────────────────────────────────────────────────
@@ -707,8 +1072,13 @@ def board_value(lg, team, p, needs, est_ca, est_pa):
     v -= (p.age - 21) * (1.2 + (g.t("youth") if g else 0.5) * 1.6)
     bpa = g.t("bpa") if g else 0.5
     v += needs.get(p.position, 0) * 9 * (1.6 - 1.2 * bpa)
-    if p.position == "QB" and "Find a franchise QB" in (getattr(team, "plan", None) or {}).get("focus", ()):
+    focus = focus_of(team)
+    if p.position == "QB" and "Find a franchise QB" in focus:
         v += 6
+    elif p.position == "QB" and "Groom the QB's successor" in focus:
+        v += 4
+    elif p.position == "QB" and "Develop the young QB" in focus:
+        v -= 6
     if p.position in ("K", "P"):
         v -= 22
     if p.position == "FB":
@@ -1242,12 +1612,13 @@ def coach_fit(lg, team, coach):
     return v
 
 
-def owner_coach_patience(team):
+def owner_coach_patience(team, year=None):
     """Multiplier on the chance a struggling coach is fired."""
     o = owner_traits(team.owner)
     f = 1.75 - o.patience * 0.05
-    if plan_of(team) in ("Rebuild", "Tank", "Youth Movement") and team.plan.get("since", 0) >= 0:
-        f *= 0.6
+    since = (team.plan or {}).get("since", 0) if getattr(team, "plan", None) else 0
+    if plan_of(team) in ("Rebuild", "Tank", "Youth Movement") and (year is None or year - since <= 3):
+        f *= 0.6                         # the first seasons of a rebuild are given time
     g = gm_of(team)
     if g is not None and g.seasons == 0:
         f += 0.35                    # a new GM often wants his own coach

@@ -256,8 +256,10 @@ GAMEDAY_DESC = [
      "Settings > AI: Rookie (0.5), Pro (1.0, realistic), All-Pro (1.5) or Hall of Fame (2.0). It changes how "
      "well CPU staffs decide, never how good their players are. Higher levels study more film and read it "
      "more accurately, lean harder into their game plans, adjust faster during games, manage the clock "
-     "better and trust the numbers more on 4th down and two-point tries. Your own staff always works at the "
-     "Pro level, so its quality comes from the coaches you hire."),
+     "better and trust the numbers more on 4th down and two-point tries. Their front offices judge players "
+     "and potential more accurately and weigh what a trade does to their roster more fully, so lopsided "
+     "trades are harder to find. Your own staff always works at the Pro level, so its quality comes from "
+     "the coaches you hire."),
 ]
 
 PLAYBOOK_DESC = [
@@ -416,6 +418,39 @@ def front_office_desc():
                 "players taken in the same round. He trusts positions where he has hit and is warier where he "
                 "has missed. GMs also drift toward the ideas of the latest champion, and owners tend to replace "
                 "a fired GM with someone unlike him, so front-office fashions come and go."))
+    for k, v in fo.FOCUS_EFFECTS.items():
+        out.append((f"Priority: {k}", v))
+    out.append(("Trade value", "How much a club values a player in a trade, on the same scale as draft picks. It "
+                "grows much faster than his rating: an average starter is worth about a third-round pick, a Pro "
+                "Bowl player a high first and an elite one two firsts or more, with quarterbacks worth most. "
+                "Young players add what their scouts think they can become, players past their position's "
+                "prime lose value each year, and a cheap contract adds value while an expensive one takes it "
+                "away."))
+    out.append(("What a deal adds to the roster", "A club judges a package by what it does to its own roster. "
+                "A player who would start is worth his full value, a rotation player or a prospect less, and a "
+                "deep backup little. Each extra piece in a package counts for less than the one before, so "
+                "several good players rarely buy a star. A club trying to win now also charges for the hole a "
+                "deal leaves in this season's lineup, above all at quarterback."))
+    out.append(("Scouting fog", "CPU clubs see current ratings like you do, but not potential: for other clubs' "
+                "young players they have their scouts' range, read through their own scouting department, "
+                "and a lean of their own inside it. They know their own players."))
+    out.append(("Re-signing and extensions", "At the end of the re-signing window a CPU club works out next "
+                "season's money (the deals that are ending don't count), keeps back enough for its draft picks "
+                "and minimum bodies, and re-signs its players in order of how much they matter to it. It will "
+                "stretch to the hard cap for a star or a cheap starter. An ambitious player on an unattractive "
+                "club may turn it down and test the market. Young core players in the last year of a deal are "
+                "often extended early, before a big season raises their price."))
+    out.append(("Hot seat", "A GM whose last three seasons fall short of his owner's bar is on the hot seat. He "
+                "trades future picks for help now and won't start a rebuild that could cost him his job."))
+    out.append(("Training focus (CPU)", "Before camp every CPU staff picks a training focus for each player: young "
+                "players work on the most important part of their game where they are weakest, veterans past "
+                "their prime on their body to keep their speed. Good teaching staffs get it right more often. "
+                "Young players with real upside get the extra playing time on a rebuilding club."))
+    out.append(("Difficulty and the front office", "The Difficulty setting (CPU intelligence) also sharpens or "
+                "dulls every CPU front office: a GM judges players as if his judgement were better or worse, "
+                "his scouts read potential as if the department were better or worse, his plan misreads his "
+                "roster less, and he weighs what a deal does to his roster more or less fully. Ratings never "
+                "change."))
     for k, v in fo.OWNER_TYPES.items():
         out.append((f"Owner: {k}", v))
     for k, v in fo.POWER_TYPES.items():
@@ -656,7 +691,8 @@ SETTING_DESC = {
     "ai_personality_strength": "How different CPU front offices are. 0 makes them all alike.",
     "holdout_rate": "How often underpaid stars hold out (normally 0-3 a season).",
     "cpu_intelligence": "Difficulty. How well CPU staffs scout, game-plan, adjust during games and make 4th-down "
-                        "and clock decisions: 0.5 Rookie, 1.0 Pro (realistic), 1.5 All-Pro, 2.0 Hall of Fame. "
+                        "and clock decisions, and how well CPU front offices judge players, plan and trade: "
+                        "0.5 Rookie, 1.0 Pro (realistic), 1.5 All-Pro, 2.0 Hall of Fame. "
                         "Player ratings are never changed; your own staff always works at the Pro level.",
     "watch_games": "Open the live viewer for your games when you press Continue.",
     "sim_stop_injury": "Multi-week sims stop when one of your starters is hurt for 3+ weeks.",
