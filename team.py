@@ -63,7 +63,8 @@ def _active(p):
 
 class Team:
     tag_year = None          # season the franchise tag was last used
-    rotation = None          # {"DL": "heavy", ...} how freely each group substitutes (None = normal)
+    rotation = None          # {"DL": "heavy", ...} how freely each group substitutes (None/"coach" = head coach's style)
+    injury_policy = None     # the user's call on hurt players: None (head coach decides), "ride" or "protect"
     def_gameplan = None      # the user's defensive game-plan choices (defense.GAMEPLAN_OPTIONS)
     ir_returns = (None, 0)   # (season, players activated from IR)
     gm = None                # CPU general manager (front_office.GM); None for the user's club

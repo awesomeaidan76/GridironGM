@@ -333,6 +333,28 @@ def coach_youth_trust(c):
     return v
 
 
+def coach_rotation(c):
+    """His rotation style (substitutions.ROTATION_STYLES), drawn once from his system and age."""
+    v = getattr(c, "rotation_style", None)
+    if v is None:
+        import substitutions as sub
+        r = random.Random(zlib.crc32(f"coach-rot:{c.name}:{c.age}".encode()))
+        w = sub.style_weights(c.off_scheme, c.tendencies.get("front"), c.age)
+        v = r.choices(list(w), weights=list(w.values()), k=1)[0]
+        c.rotation_style = v
+    return v
+
+
+def coach_protect(c):
+    """0-1: how protective he is with banged-up and worn-down players."""
+    v = getattr(c, "protect", None)
+    if v is None:
+        r = random.Random(zlib.crc32(f"coach-protect:{c.name}:{c.age}".encode()))
+        v = round(_clamp(r.gauss(0.5, 0.18) + (c.r("development") - 10) * 0.01), 3)
+        c.protect = v
+    return v
+
+
 def coach_style(c):
     best = max(COACH_STYLES, key=lambda k: c.r(k) + (0.4 if k in ("offense", "defense") else 0))
     style = COACH_STYLES[best]
@@ -347,6 +369,10 @@ def coach_style(c):
         extra.append("plays young players")
     elif yt <= 0.34:
         extra.append("trusts veterans")
+    import substitutions as sub
+    for note in (sub.STYLE_NOTES.get(coach_rotation(c), ""), sub.protect_label(coach_protect(c))):
+        if note:
+            extra.append(note)
     return style + (f" ({', '.join(extra)})" if extra else "")
 
 
