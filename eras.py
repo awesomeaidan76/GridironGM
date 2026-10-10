@@ -296,6 +296,8 @@ def season_averages(results):
         "fourth_conv": 100.0 * tot["fourth_conv"] / max(1, tot["fourth_att"]),
         "two_att": tot["two_att"] / games,
         "two_conv": 100.0 * tot["two_conv"] / max(1, tot["two_att"]),
+        "ko_return_pct": 100.0 * tot["ko_returned"] / max(1, tot["kickoffs"]),
+        "ko_start": tot["ko_start"] / max(1, tot["ko_drives"]),
         "games": games // 2,
     }
     return out

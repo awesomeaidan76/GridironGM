@@ -1337,7 +1337,8 @@ class TacticsScreen(Screen):
                 out.append(("def:" + name, name, typ, likes.get(name, 1.0), dlib.describe(name)))
         else:
             groups = ((stl.KICKOFFS, "kickoff"), (stl.KICK_RETURNS, "kick return"), (stl.PUNTS, "punt"),
-                      (stl.PUNT_RETURNS, "punt return"), (stl.FG_DEFENSE, "field goal defence"))
+                      (stl.PUNT_RETURNS, "punt return"), (stl.FG_DEFENSE, "field goal defence"),
+                      (stl.FAKES, "fake"))
             for d, typ in groups:
                 for name in d:
                     out.append(("st:" + name, name, typ, 1.0, d[name]))

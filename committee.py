@@ -21,6 +21,7 @@ RULES = {
     "qb_protection": ("Quarterback protection", 0, 3),
     "holding": ("Holding enforcement", -1, 2),
     "kickoff": ("Kickoff touchback spot", 0, 1),
+    "dynamic_kickoff": ("Dynamic kickoff", 0, 2),
 }
 
 DESCRIBE = {
@@ -32,6 +33,11 @@ DESCRIBE = {
     ("holding", 1): "relaxes offensive holding enforcement on the line of scrimmage",
     ("holding", -1): "orders officials to call offensive holding more strictly",
     ("kickoff", 1): "moves the touchback on kickoffs out to the 30-yard line",
+    ("dynamic_kickoff", 1): "adopts the dynamic kickoff: both units line up five yards apart and nobody "
+                            "moves until the ball lands, kicks must land between the goal line and the "
+                            "20, and onside kicks must be declared",
+    ("dynamic_kickoff", 2): "moves the touchback on dynamic kickoffs out to the 35 to get more kicks "
+                            "returned",
 }
 
 
@@ -53,7 +59,9 @@ def effects(rules):
         "qb_injury": 1.0 - 0.14 * qbp,
         "roughing": 1.0 + 0.25 * qbp,
         "holding": 1.0 - 0.10 * hold,
-        "touchback": 30 if r.get("kickoff", 0) >= 1 else 25,
+        "touchback": 35 if r.get("dynamic_kickoff", 0) >= 2 else
+        30 if r.get("kickoff", 0) >= 1 or r.get("dynamic_kickoff", 0) >= 1 else 25,
+        "dynamic_kickoff": r.get("dynamic_kickoff", 0) >= 1,
     }
 
 
@@ -66,6 +74,8 @@ def review(lg):
     rules = getattr(lg, "rules", None)
     if rules is None:
         rules = lg.rules = default_rules()
+    for k in RULES:
+        rules.setdefault(k, 0)                         # rules added after the league was created
     if not hasattr(lg, "rule_history"):
         lg.rule_history = []
     if not hasattr(lg, "qb_injury_history"):
@@ -98,6 +108,17 @@ def review(lg):
     # Player-safety housekeeping now and then
     if rules["kickoff"] < 1 and random.random() < 0.04:
         candidates.append(("kickoff", 1, 1.0))
+    # Kickoffs that are mostly touchbacks are a dead play: the committee rebuilds the kickoff
+    # (and pushes the touchback out further if most kicks still aren't returned)
+    ret = [h["ko_return_pct"] for h in hist if "ko_return_pct" in h]
+    ret = _avg(ret) if len(ret) >= 2 else None
+    if ret is not None:
+        if rules["dynamic_kickoff"] == 0 and ret < 45.0:
+            candidates.append(("dynamic_kickoff", 1, 0.10 + (45.0 - ret) * 0.012 + 0.1 * rules["kickoff"]))
+        elif rules["dynamic_kickoff"] == 0 and random.random() < 0.05:
+            candidates.append(("dynamic_kickoff", 1, 1.0))      # player safety: high-speed collisions
+        elif rules["dynamic_kickoff"] == 1 and ret < 55.0:
+            candidates.append(("dynamic_kickoff", 2, 0.25 + (55.0 - ret) * 0.02))
 
     random.shuffle(candidates)
     for key, step, prob in candidates:

@@ -312,12 +312,23 @@ every snap stores a small diagram dict (formation, routes, defensive call,
 result), which the live viewer animates.
 
 **Special teams** (`specialteams.py`): kickoff types (deep, directional,
-squib, pooch, onside, surprise onside) and returns (middle, sideline wall,
-wedge, reverse); punt types (spread, directional, rugby, pooch) against
-return calls (return, wall, block, safe/fake-watch); field-goal block vs
-safe. Core special-teams players (backup linebackers, safeties, corners,
-tight ends and backs) plus the special-teams coach make a unit rating that
-moves return yardage on both sides.
+squib, pooch, onside, surprise onside, landing-zone kick) and returns (middle,
+sideline wall, wedge, reverse, return to the field, throwback); punt types
+(spread, directional, rugby, pooch, coffin corner, quick kick) against return
+calls (return, wall, hold-up, block, safe/fake-watch); field-goal block vs
+safe. Named fakes (`FAKES`: up-back run, punter run/pass, holder run/pass,
+swinging gate on two-point tries) are picked by `choose_fake` from the
+situation and the punter's or holder's arm. Free kicks (`FREE_KICKS`) cover
+the safety punt and the fair catch kick (a free field-goal try after a fair
+catch, only near the end of a half). Under the old kickoff rules strong legs
+force touchbacks (about 60% of kicks); once the committee adopts the dynamic
+kickoff (`rules["dynamic_kickoff"]`), kickers aim at the landing zone, deep
+kicks become touchbacks at the 30 (step 1) or 35 (step 2), short kicks give the
+ball at the 40, onside kicks must be declared, and most kicks are returned.
+Team stats `kickoffs`, `ko_returned`, `ko_start`/`ko_drives` and `quick_kicks`
+feed the committee. Core special-teams players (backup linebackers, safeties,
+corners, tight ends and backs) plus the special-teams coach make a unit rating
+that moves return yardage on both sides.
 
 **Advanced stats** (`advanced.py`): every scrimmage snap is valued with an
 expected-points model (down, distance, yard line) fitted to this engine by
@@ -450,7 +461,7 @@ Settings: `gm_hot_seat` and `ai_personality_strength`, alongside the existing AI
   - `adapt_coaching` moves every coach's pass lean toward whatever is more efficient (net yards per attempt vs yards per carry). Defenses answer pass-heavy leagues with two-high shells, which soften run defense.
 - Slow drift: each group also has a generational wave (`pipeline_wave`, a very persistent random walk), and the league's football culture (`style_drift`) drifts with what has been working. Coaches settle back toward their scheme *plus* that culture, so a passing (or running) generation can last decades.
 - Front offices: analytics GMs re-value positions as the league changes, and GM styles spread when they win titles and fade when they fail (see 4b).
-- `committee.review` changes rules (downfield contact, QB protection, holding, kickoff touchbacks) when scoring dries up or quarterbacks keep getting hurt.
+- `committee.review` changes rules (downfield contact, QB protection, holding, kickoff touchbacks, the dynamic kickoff) when scoring dries up, quarterbacks keep getting hurt or kickoff returns die out (the dynamic kickoff comes in when under 45% of kickoffs are returned, plus a small player-safety chance each year; step 2 moves the touchback to the 35 if returns stay under 55%).
 - Coaching trees: successful coaches' assistants get hired elsewhere and take their mentor's tendencies with them. Innovators counter the trend.
 
 ## 6. Suggested porting order for Unreal

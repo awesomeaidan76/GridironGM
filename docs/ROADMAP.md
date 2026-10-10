@@ -62,8 +62,11 @@ The owner set the order of this work in October 2026.
   Leak, Scissors, Hoss, Jailbreak Screen and Pop Pass; Palms, Cover 7/8/9, Cover 2 Invert and
   three-high coverages, the Penny front, corner and edge zone blitzes, Amoeba, Double Mug and green
   dogs; the Wide Zone and Three-High systems; custom coverages and motion in playbook JSON.
-- 🔜 **Special teams** depth and the dynamic kickoff (a competition-committee rule), then smarter
-  CPU depth charts and packages.
+- ✅ **Special teams** depth: the dynamic kickoff as a competition-committee rule (landing zone,
+  touchback at the 30 then 35, declared onsides; adopted when returns die out), named fakes (up-back,
+  punter and holder runs and passes, the swinging gate), return to the field, throwback, hold-up
+  return, coffin-corner punts, quick kicks, the fair catch kick and the safety free kick.
+- 🔜 Smarter CPU depth charts and packages (with difficulty levels).
 - 🔜 **Game-day inactives** (48 of 53).
 - 💡 The rest of the depth chart GUI ideas: a game-day preview of who takes the field in each
   personnel group after injuries and rotation; depth warnings fed into the Inbox; "compare at

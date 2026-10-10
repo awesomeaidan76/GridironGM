@@ -819,6 +819,24 @@ def main():
     if os.path.exists(ui_state.STATE_FILE):
         os.remove(ui_state.STATE_FILE)
     step("save/load")
+    # Dynamic kickoff is a committee rule: kicks land in the landing zone and most are returned
+    from engine import simulate_game
+    import committee
+    from eras import season_averages
+    random.seed(5)
+    games = []
+    for _ in range(6):
+        h, a = random.sample(list(lg2.teams.values()), 2)
+        games.append(simulate_game(h, a, keep_pbp=True, rules={"dynamic_kickoff": 2}))
+    av = season_averages(games)
+    assert av["ko_return_pct"] > 50, av["ko_return_pct"]
+    assert committee.effects({"dynamic_kickoff": 2})["touchback"] == 35
+    assert committee.effects({})["touchback"] == 25
+    assert any("landing zone" in ln[4] for g in games for ln in g.plays)
+    for t in lg2.teams.values():
+        for p in t.roster:
+            p.injury = None
+    step("dynamic kickoff")
     assert any(DIAG_SEEN), "no play diagrams were drawn"
     assert {"offer", "ir", "expiring", "draft"} <= INBOX_KINDS, INBOX_KINDS
     print("negotiations:", [(n, r) for n, r, _ in NEGOTIATIONS][:8])
