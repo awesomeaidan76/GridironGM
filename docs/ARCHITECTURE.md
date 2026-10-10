@@ -269,10 +269,31 @@ and `dpkg|` snaps.
    draws a safety in coverage when one is free. Unfamiliar players also raise their unit's
    penalty odds (`PENALTY_RATE` 0.30 × unfamiliarity each) and are likelier to be the one flagged. The
    trenches code asks `pos(player)`, the slot he is playing, for every role check.
-5. **Game plans.** At kickoff each defensive coordinator scouts the opponent (`defense.scout`): pressure,
-   coverage and shell leans, box count, QB spy, bracket target, shadow corner, with errors that shrink with
-   the coordinator's rating. The user's Game Plan choices override it. At quarter breaks (mostly halftime)
-   `defense.adjust` leans the defence against what is working and the offence leans toward it.
+5. **Game plans** (`gameday.py`, `defense.scout`). `season.play_week` passes each club's games so far
+   (`simulate_game(scouting=..., user_abbr=...)`); each staff studies the opponent's last `film` games
+   (`gameday.film`: situational pass rates, personnel, defensive call counts, what offenses gained against it)
+   blended with a prior from the coach's system. Defense: `read_offense` estimates the pass lean and the pass
+   rate per situation bucket; `defense.scout` turns it into pressure, coverage and shell leans, box count, QB
+   spy, bracket target and shadow corner, with errors that shrink with the coordinator's rating. In
+   `_def_call` the box gets lighter or heavier when the offense throws more or less than usual in that bucket
+   (`sit_lean`). Offense: `offense_plan` predicts the coverage mix (`coverage_prior` samples the defense's own
+   call chooser; film counts move it), weights every pass concept by its expected coverage-beater edge
+   (`concept_edges`, `defense.COV_EDGE`), and sets pass/deep/screen shifts, receiver target weights from WR vs
+   CB matchups and the run side from the line. Its strength `g` = difficulty `plan` x OC calling/20 x
+   (0.5 + adaptability/20). Offenses that know the defense reads tendencies break their own (`self_read`).
+   The weights merge with the user's Featured/Removed plays into `side.prefs`, rebuilt at every drive start
+   from this game's `oc|`/`dc|` EPA (`gameday.learned`: concepts, runs and coverages that work get called more;
+   a defense whose pressure gets burned blitzes less). The user's Game Plan choices override the defensive
+   plan. At quarter breaks (mostly halftime) `defense.adjust` leans the defence against what is working, the
+   offence leans toward it, and the defense refreshes its tendency read with today's snaps. An injury to a
+   starter re-plans both sides (`_replan`); a sharp offense goes no-huddle against a tired front
+   (`_tired_front`). The two-point decision uses the real matchup chance.
+   **Difficulty** (`settings["cpu_intelligence"]`, 0-2, 1.0 = Pro, realistic): `gameday.effects(iq)` gives
+   `sharp` (moves decision ratings - calling for reads and adjustments, game management for the clock, 4th
+   down and two-point calls - toward 20), `film`, `read` (scouting error), `plan` and `learn`, plus
+   `caution` (how much the staff trusts the win-probability math). It applies to CPU sides only; the user's
+   staff always uses `effects(1.0)`. It never touches ratings or the flat calling bonuses.
+   `tools/duel.py` plays identical pairings with the dial swapped to measure what it is worth.
 6. **Line play** (`trenches.py`). Pass protection assigns every rusher a blocker (tackles on edges,
    guards on interior rushers, spare linemen slide toward the most dangerous rusher, TEs/backs chip or pick up
    blitzers); each matchup is a one-on-one won on the two players' attributes, with more time for the rush on
@@ -451,7 +472,9 @@ Every CPU club has three decision makers, all plain data plus small functions:
 - Owner sales (2% a year).
 - The GM carousel: firing by owner patience and ambition. Replacements come from the pool, a successful front office's lieutenant, or a new archetype weighted by recent champions, the owner's taste, scarcity, and contrast with the man who failed.
 
-Settings: `gm_hot_seat` and `ai_personality_strength`, alongside the existing AI sliders.
+Settings: `gm_hot_seat` and `ai_personality_strength`, alongside the existing AI sliders. `cpu_intelligence`
+(difficulty) currently sharpens CPU game-day staffs (section 3, item 5); front-office and depth-chart
+decisions will read the same dial.
 
 ## 5. How eras emerge (no presets)
 

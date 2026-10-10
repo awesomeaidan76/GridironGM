@@ -221,12 +221,15 @@ def main():
     ng.table.setCurrentCell(5, 0)
     abbr = ng.table.selected_key()
     ng._show(abbr)
+    ng.difficulty.setCurrentIndex(ng.difficulty.findData(1.5))      # All-Pro
     ng._start()
     lg = ng.league
     assert lg.user_abbr == abbr, (lg.user_abbr, abbr)
+    assert lg.custom_settings["cpu_intelligence"] == 1.5, lg.custom_settings
     step("new game dialog")
 
     win = MainWindow(lg)
+    assert settings_mod.settings["cpu_intelligence"] == 1.5     # the league's own difficulty is active
     step("main window")
     for key in ("roster", "stats", "players"):
         win.goto(key)
@@ -837,6 +840,17 @@ def main():
         for p in t.roster:
             p.injury = None
     step("dynamic kickoff")
+    # Difficulty: CPU staffs scout from film and game-plan; the user's staff stays at the Pro level
+    import gameday
+    h, a = list(lg2.teams.values())[:2]
+    g = simulate_game(h, a, keep_pbp=True, user_abbr=h.abbr, iq=2.0,
+                      scouting={t.abbr: lg2.team_results(t.abbr) for t in (h, a)})
+    assert set(g.off_notes) == {h.abbr, a.abbr} and "read" in g.gameplans[a.abbr]
+    assert gameday.level_name(2.0) == "Hall of Fame" and gameday.effects(1.0)["sharp"] == 0.0
+    for t in (h, a):
+        for p in t.roster:
+            p.injury = None
+    step("difficulty and game plans")
     assert any(DIAG_SEEN), "no play diagrams were drawn"
     assert {"offer", "ir", "expiring", "draft"} <= INBOX_KINDS, INBOX_KINDS
     print("negotiations:", [(n, r) for n, r, _ in NEGOTIATIONS][:8])

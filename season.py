@@ -187,13 +187,19 @@ def _development_news(lg, p, team, old, new, note):
 
 # ── Regular season ────────────────────────────────────────────────────────────
 
+def _staff_args(lg, home, away):
+    """What both staffs bring to a game: whose club is the user's, and each club's film this season."""
+    return {"user_abbr": lg.user_abbr,
+            "scouting": {abbr: lg.team_results(abbr) for abbr in (home, away)}}
+
+
 def play_week(lg):
     if lg.phase != "regular" or lg.week >= len(lg.schedule):
         return []
     results = []
     for home, away in lg.schedule[lg.week]:
         res = simulate_game(lg.teams[home], lg.teams[away], week=lg.week + 1, season=lg.year,
-                            rules=lg.rules, diagrams=lg.user_abbr in (home, away))
+                            rules=lg.rules, diagrams=lg.user_abbr in (home, away), **_staff_args(lg, home, away))
         lg.record_game(res)
         _apply_game(lg, res, playoff=False)
         results.append(res)
@@ -399,7 +405,7 @@ def play_playoff_round(lg):
         home, away = (a, b) if lg.standings[a].sort_key() >= lg.standings[b].sort_key() else (b, a)
         res = simulate_game(lg.teams[home], lg.teams[away], week=99, season=lg.year,
                             playoff=name, neutral=True, rules=lg.rules,
-                            diagrams=lg.user_abbr in (home, away))
+                            diagrams=lg.user_abbr in (home, away), **_staff_args(lg, home, away))
         _apply_game(lg, res, playoff=True)
         results.append(res)
         lg.playoff_results[name] = results
@@ -430,7 +436,7 @@ def play_playoff_round(lg):
         for hi, lo in pairs:
             res = simulate_game(lg.teams[hi], lg.teams[lo], week=90 + lg.playoff_round,
                                 season=lg.year, playoff=name, rules=lg.rules,
-                                diagrams=lg.user_abbr in (hi, lo))
+                                diagrams=lg.user_abbr in (hi, lo), **_staff_args(lg, hi, lo))
             _apply_game(lg, res, playoff=True)
             results.append(res)
             loser = res.loser
@@ -438,7 +444,7 @@ def play_playoff_round(lg):
             lg.playoff_exit[loser] = lg.playoff_round
             if name == "Conference Championship":
                 lg.teams[res.winner].conf_titles += 1
-        _post_playoff_injuries(lg)
+    _post_playoff_injuries(lg)              # once per round, not once per conference
     _position_learning(lg, results, [lg.teams[a] for r in results for a in (r.home, r.away)])
     lg.playoff_results[name] = results
     if lg.user_abbr:

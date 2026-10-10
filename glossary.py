@@ -222,12 +222,42 @@ GAMEDAY_DESC = [
      "don't like being moved off their spot, and anyone likes a move that makes him a starter. Calm players "
      "take it in their stride. A player who spends real time away from his position each week also feels it "
      "a little: adaptable players don't mind, ambitious stars do."),
+    ("Film study", "Before each game both staffs watch the opponent's recent games (four at the Pro difficulty "
+     "level). They count how often it passes on each down and distance, which coverages it plays and how "
+     "often it blitzes, and what offenses have done against it. Early in the season, with little film, they "
+     "go on what they know of the coach's system. Better coordinators read the film more accurately."),
     ("Game plan", "Before each game the defensive coordinator scouts the opponent and adjusts: more pressure "
      "against a shaky quarterback, a spy against a runner, a safety rolled toward a star receiver, a loaded "
      "box against a run-first team. Good coordinators read it right; poor ones over- or under-react. Set your "
      "own choices on the Game Plan screen."),
+    ("Offensive game plan", "The offensive coordinator plans for the defense too: he features the pass concepts "
+     "that beat the coverages it plays most (Smash against Cover 2, crossers against man), takes more shots "
+     "against single-high safeties and works underneath against two-high, calls more screens and quick throws "
+     "against a blitzing team, leans on the run or the pass depending on which of its units is weaker, looks "
+     "for the receiver with the best matchup against its corners and runs behind the stronger side of the "
+     "line. Adaptable head coaches lean into the plan (game-plan coaches); stubborn ones mostly run their "
+     "system. The Game Plan screen shows your coordinator's plan."),
+    ("Reading tendencies", "A defense that has seen on film that an offense throws more than usual on, say, "
+     "1st and 2nd down plays a lighter box there, and loads it where the offense likes to run. Sharp offensive "
+     "staffs know what their own film shows and break their tendencies against defenses that read them."),
     ("Halftime adjustments", "At quarter breaks, and above all at halftime, both coordinators look at what is "
-     "working — runs or passes, short or deep — and lean against it (defense) or into it (offense)."),
+     "working — runs or passes, short or deep — and lean against it (defense) or into it (offense). The "
+     "defense also updates its read of the offense's tendencies with what it has shown today."),
+    ("Series adjustments", "Between series both staffs look at their call sheet: concepts, runs and coverages "
+     "that have worked today get called a little more, ones that have been beaten a little less, and a "
+     "defense whose blitzes keep getting burned rushes four more often. Sharper, more adaptable staffs adjust "
+     "faster. Your Featured and Removed plays always stay in force."),
+    ("Injury adjustments", "When a starter goes down both staffs re-plan: an offense that loses its quarterback "
+     "leans on the run and plays safer, the defense re-scouts the backup, and an offense goes after a backup "
+     "corner who has just come in."),
+    ("Tempo against a tired front", "A sharp offensive staff that sees the defensive line tiring goes no-huddle "
+     "more often, so the defense can't substitute fresh linemen."),
+    ("Difficulty (CPU intelligence)", "A league setting chosen when you start a career and changed any time in "
+     "Settings > AI: Rookie (0.5), Pro (1.0, realistic), All-Pro (1.5) or Hall of Fame (2.0). It changes how "
+     "well CPU staffs decide, never how good their players are. Higher levels study more film and read it "
+     "more accurately, lean harder into their game plans, adjust faster during games, manage the clock "
+     "better and trust the numbers more on 4th down and two-point tries. Your own staff always works at the "
+     "Pro level, so its quality comes from the coaches you hire."),
 ]
 
 PLAYBOOK_DESC = [
@@ -343,7 +373,9 @@ COACHING_DESC = [
     ("4th down and 2-point decisions", "Coaches compare win probability for going for it, punting and kicking "
      "(and for one or two points after a touchdown), then lean on their own temperament: aggressive coaches go "
      "for it on closer calls, cautious ones kick unless the numbers are clear. If going for it keeps working "
-     "around the league, coaches get bolder over the years."),
+     "around the league, coaches get bolder over the years. Before a two-point try the staff weighs its "
+     "offense against that defense rather than a league-average chance. On higher difficulty levels CPU "
+     "staffs trust the numbers more."),
     ("Two-minute and four-minute offense", "Trailing late, offenses hurry, get out of bounds, use timeouts "
      "when the clock is running and spike the ball when they have none left. Leading late, they run, stay in "
      "bounds and take the play clock down. Poor game managers lose seconds and waste timeouts."),
@@ -623,6 +655,9 @@ SETTING_DESC = {
     "gm_hot_seat": "How quickly owners fire CPU general managers.",
     "ai_personality_strength": "How different CPU front offices are. 0 makes them all alike.",
     "holdout_rate": "How often underpaid stars hold out (normally 0-3 a season).",
+    "cpu_intelligence": "Difficulty. How well CPU staffs scout, game-plan, adjust during games and make 4th-down "
+                        "and clock decisions: 0.5 Rookie, 1.0 Pro (realistic), 1.5 All-Pro, 2.0 Hall of Fame. "
+                        "Player ratings are never changed; your own staff always works at the Pro level.",
     "watch_games": "Open the live viewer for your games when you press Continue.",
     "sim_stop_injury": "Multi-week sims stop when one of your starters is hurt for 3+ weeks.",
     "sim_stop_offer": "Multi-week sims stop when a club makes you a trade offer.",

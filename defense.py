@@ -374,13 +374,15 @@ def _z(v, mu, sd):
     return (v - mu) / sd
 
 
-def scout(def_team, off_team, off_plan, calling=10.0, rng=random):
+def scout(def_team, off_team, off_plan, calling=10.0, rng=random, read_mult=1.0):
     """
     The defensive coordinator's plan for this opponent. Better coordinators
     read the opponent more accurately; poor ones sometimes over- or under-react.
+    off_plan is what the staff believes the offence wants to do (from film, see
+    gameday.read_offense). read_mult scales the reading error (the CPU difficulty dial).
     Returns adjustments plus plain-English notes for the scouting report.
     """
-    err = max(0.0, (20.0 - calling) / 20.0) * 0.6          # 0 (perfect read) .. 0.57
+    err = max(0.0, (20.0 - calling) / 20.0) * 0.6 * read_mult    # 0 (perfect read) .. 0.57
     noise = lambda: rng.gauss(0, err * 0.12)                # noqa: E731
     qbs = off_team.lineup("QB", 1)
     qb = qbs[0] if qbs else None

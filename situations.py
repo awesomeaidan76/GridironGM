@@ -79,16 +79,17 @@ def fourth_down_values(st):
     return {"go": go, "punt": punt, "fg": fg}
 
 
-def choose_fourth(st, aggression, game_mgmt, rng=random):
+def choose_fourth(st, aggression, game_mgmt, rng=random, caution=FOURTH_CAUTION):
     """
-    aggression 0-1 (coach tendency x league setting), game_mgmt 1-20.
+    aggression 0-1 (coach tendency x league setting), game_mgmt 1-20; caution: the extra
+    win probability the staff wants before it trusts the numbers.
     Returns "go", "punt" or "fg".
     """
     if st.get("fg_range_ok") and st["fg_prob"] < 0.45 and st["secs"] > 150:
         st = dict(st, fg_range_ok=False)       # coaches don't trust long-shot kicks until the end
     v = fourth_down_values(st)
     # Coaches don't trust the math equally: conservative ones demand a margin
-    bias = (aggression - 0.5) * 0.04 - FOURTH_CAUTION
+    bias = (aggression - 0.5) * 0.04 - caution
     noise = rng.gauss(0, 0.004 + (20 - game_mgmt) * 0.0012)
     kick = max(v["punt"], v["fg"] if v["fg"] is not None else -1)
     if v["go"] + bias + noise > kick:
@@ -98,13 +99,14 @@ def choose_fourth(st, aggression, game_mgmt, rng=random):
     return "punt"
 
 
-def two_point(diff_after_td, secs, xp_prob, aggression, game_mgmt, two_prob=0.48, edge=0.0, rng=random):
+def two_point(diff_after_td, secs, xp_prob, aggression, game_mgmt, two_prob=0.48, edge=0.0, rng=random,
+              caution=TWO_CAUTION):
     """Kick the extra point or go for two (diff_after_td: our lead after the 6)."""
     xp = xp_prob * (1 - win_prob(-(diff_after_td + 1), secs, adv.KICKOFF_EP, -edge)) \
         + (1 - xp_prob) * (1 - win_prob(-diff_after_td, secs, adv.KICKOFF_EP, -edge))
     two = two_prob * (1 - win_prob(-(diff_after_td + 2), secs, adv.KICKOFF_EP, -edge)) \
         + (1 - two_prob) * (1 - win_prob(-diff_after_td, secs, adv.KICKOFF_EP, -edge))
-    bias = (aggression - 0.5) * 0.012 - TWO_CAUTION
+    bias = (aggression - 0.5) * 0.012 - caution
     noise = rng.gauss(0, 0.002 + (20 - game_mgmt) * 0.0006)
     return two + bias + noise > xp
 

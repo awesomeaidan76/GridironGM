@@ -2147,13 +2147,23 @@ class GamePlanScreen(Screen):
                 if parts:
                     lines.append("<b>Tendencies:</b> " + " · ".join(parts))
             self.scout_text.setText("<br>".join(lines))
-            dc = dlib.scout(team, opp, oplan, calling=staff_mod.def_calling(team),
-                            rng=_r.Random(hash((lg.year, wk, team.abbr))))
+            # The staff's read, from the same film the game itself uses
+            import gameday
+            import zlib
+            seed = zlib.crc32(f"{lg.year}-{wk}-{team.abbr}".encode())
+            fx = gameday.NEUTRAL
+            film = gameday.film(games, opp.abbr, fx["film"])
+            dcall = staff_mod.def_calling(team)
+            rd = gameday.read_offense(film, oplan, max(0.0, (20.0 - dcall) / 20.0) * 0.6, rng=_r.Random(seed))
+            seen = dict(oplan)
+            seen["pass_rate"] = rd["pass_rate"]
+            dc = dlib.scout(team, opp, seen, calling=dcall, rng=_r.Random(seed))
             saved = getattr(team, "def_gameplan", None)
             team.def_gameplan = None
-            auto = dlib.scout(team, opp, oplan, calling=staff_mod.def_calling(team),
-                              rng=_r.Random(hash((lg.year, wk, team.abbr))))
+            auto = dlib.scout(team, opp, seen, calling=dcall, rng=_r.Random(seed))
             team.def_gameplan = saved
+            ogp = gameday.offense_plan(team, opp, film, staff_mod.off_calling(team), team.coach.r("adaptability"),
+                                       fx, opp.gameplan(), rng=_r.Random(seed + 1))
             notes = auto["notes"] or ["No special adjustments — play our normal defense."]
             self.dc_text.setText("<b>Your coordinator's read:</b><br>• " + "<br>• ".join(notes) +
                                  f"<br><span style='color:{T('muted')}'>Plan in effect: "
@@ -2161,7 +2171,9 @@ class GamePlanScreen(Screen):
                                  f"{'QB spy, ' if dc['spy'] else ''}"
                                  f"bracket {dc['bracket'] * 100:.0f}% of the time, "
                                  f"box {dc['box']:+.1f}, pressure {dc['blitz']:+.2f}, "
-                                 f"two-high {dc['two_high']:+.2f}</span>")
+                                 f"two-high {dc['two_high']:+.2f}</span><br><br>"
+                                 "<b>Your offensive coordinator's plan:</b><br>• " +
+                                 "<br>• ".join(ogp["notes"] or ["No special plan: run our offense."]))
         self._report()
 
     def _plan_changed(self, key):

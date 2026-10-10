@@ -519,6 +519,18 @@ def take_job(lg, abbr):
     if team.tactics is None:
         from season import default_tactics
         team.tactics = default_tactics()
+    prev = lg.teams.get(old) if old else None
+    if prev is not None and prev is not team:
+        # The club you left goes back to its own staff: your sliders, depth chart orders and plans stay behind
+        prev.tactics = None
+        prev.depth_overrides = {}
+        prev.depth_locks = None
+        prev.depth_auto = False
+        prev.rotation = None
+        prev.def_gameplan = None
+        prev.play_prefs = None
+        import front_office as fo
+        fo.ensure(lg)                     # it gets a GM of its own; yours leaves its old club
     lg.add_news("Front Office", f"You have been appointed general manager of the "
                                f"{team.full_name} (previously {old}).", abbr)
     set_expectation(lg)
