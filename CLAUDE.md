@@ -18,6 +18,8 @@ stay UI-free (see `docs/ARCHITECTURE.md`).
 - Expected-points table refit (after big engine changes): `python tools/fit_ep.py`.
 - Front-office AI checks (lopsided trade offers, fair swaps, a season of re-signings and payrolls):
   `python tools/fo_probe.py [seed] [--iq 0.5] [--season]`.
+- Development and potential over a few seasons (talent counts, POT-OVR by age, yearly change, how often
+  young players reach their ceiling): `python tools/dev_probe.py [seasons] [seed]` (~25 s a season).
 - Offensive system identity (pass rate, depth, personnel, shotgun, QB runs, motion per system): `python tools/schemes.py`.
 - Check several calibrate seeds before trusting a change: league talent landscapes vary a lot.
 

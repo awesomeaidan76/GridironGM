@@ -247,6 +247,13 @@ and `dpkg|` snaps.
    5. **Pass:** choose the concept (screen/short/medium/deep, play-action, flea-flicker). Pressure is a sigmoid of pass rush minus protection; under pressure the QB is sacked, scrambles or throws it away. Each receiver gets an *openness* score from route skill vs coverage. The QB's read is a softmax over the receivers, sharper for better processors. Then roll completion, interception and drops, and draw yards after the catch from an exponential distribution plus breakaway chances.
    6. **Run:** choose the concept (inside/outside zone, duo, split zone, power, counter, trap, lead, draw, toss, crack toss, pin and pull, buck sweep, jet sweep, reverse, wildcat, designed QB counter and QB power, and the option family: zone read, inverted veer, midline, speed and triple option) from the coach's system (`playbook.SCHEME_RUNS`). Split zone uses the tight end or fullback as the kick-out blocker and the QB runs use the back as a lead blocker (`lead` in `trenches.run_matchups`); crack toss depends on the receivers' run blocking; duo gains against two-high shells. Option plays read an unblocked defender: the QB's decision making against the defender's recognition decides give, keep or pitch and whether the read was right. Blocking vs the front (plus the defensive call) gives `bd`; carrier skill vs tacklers gives `rd`. These set the stuff chance, a short "sure" gain (Gaussian), a long-tailed extra (exponential) and breakaway chances — the NFL shape: median 3 yards, mean ~4.3, about 10% of runs going for 10+.
    7. Resolve: post-snap penalties, injuries, momentum swings, the clock, first downs and turnovers.
+      Injuries (`GameSim._injury_check`): each check's chance is `0.0125 × exposure × (1.55 − durability/100)
+      × injury_rate × tiredness`, where the exposure comes from `injuries.EXPOSURE` by role: the ball carrier
+      on every touch, the tackler, the target and his defender on a contested incompletion, a sacked or hit
+      quarterback, and on every scrimmage play one blocker (a lineman, or a tight end on runs) and one
+      defensive lineman, plus on passes one receiver in his route and one defensive back in coverage
+      (`_snap_units` lists who is on the field). The weights put about a tenth of injuries on running backs
+      and a third in the trenches, close to NFL shares.
 3. **Fatigue and rotation.** Every player has an energy value (0-100) for the game. Each snap on the
    field costs energy by position (`engine.DRAIN`, scaled by stamina, heat and the fatigue sliders); the huddle
    gives a little back (less in a no-huddle), the sideline a lot, quarter breaks, timeouts and halftime more.
@@ -369,8 +376,20 @@ and potential, multiplied by these factors:
 - contract year;
 - team culture.
 
-A random draw is then applied on top. The report shown to the user splits
-the change between those factors. The staff's view gets noisier the weaker
+A random draw is then applied on top. The ceiling (`Player.pa`) is dynamic: before
+his peak it drifts each offseason (`_drift_potential`: work, ambition, coaching,
+snaps, production, `DRIFT_SPREAD`), and half of each year's growth surprise
+(the lognormal growth luck, `GROWTH_LUCK_SD`, against its mean) carries into it
+(`_carry_growth`, also at mid-season), so a player who jumps gains ceiling and
+one who stalls loses it. Measured over simulated leagues, the ceiling ends up
+near the 75th percentile of a young player's eventual peak, the same meaning
+Football GM gives its potential. Young players enter well below it
+(`player.YOUTH_GAP`, `draft.AGE_GAP`: about 18 OVR at 21) and grow about 3 OVR
+a year at 21-23 (`GROWTH_PACE`). Quarterbacks and kickers keep the plain gap
+(they already grow slowly until 29). Generated young players keep the ceiling
+their target implies and start lower, except a new league's starters, which
+the match engine is calibrated around. `tools/dev_probe.py` measures all of
+this. The report shown to the user splits the change between those factors. The staff's view gets noisier the weaker
 the coaches are. Young players also get a smaller mid-season change after
 week 9.
 

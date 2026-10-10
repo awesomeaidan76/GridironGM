@@ -10,15 +10,17 @@ import zlib
 
 from contracts import rookie_salary, make_contract
 from eras import POS_GROUP
-from player import generate_player
+from player import generate_player, youth_gap
 from ratings import POSITION_VALUE
 from settings import settings
 
-PA_MEAN = 103.0
+PA_MEAN = 104.5
 PA_SD = 23.5
 # Positions where teams need more top-end talent than the raw draft supplies
 PA_POS_OFFSET = {"QB": 16, "RB": 14, "FB": -20, "WR": 6, "TE": 3, "OT": 5, "IOL": 1,
                  "DT": 6, "EDGE": 10, "LB": 8, "CB": 7, "S": 3, "K": 11, "P": 6}
+# How far below his ceiling a prospect enters the league (CA mean, sd), times player.youth_gap:
+# about 18 OVR points at 21 for most positions
 AGE_GAP = {21: (31, 9), 22: (25, 8), 23: (19, 7), 24: (13, 6)}
 
 DRAFT_POS_DIST = {"QB": 4, "RB": 7, "FB": 1, "WR": 14, "TE": 6, "OT": 8, "IOL": 9,
@@ -56,7 +58,8 @@ def generate_class(lg):
             pa += random.uniform(22, 45)          # elite ceiling
         pa = 100 + (pa - 100) * scale
         pa = int(max(60, min(200, pa)))
-        gap = max(4.0, random.gauss(*AGE_GAP[age]))
+        k = youth_gap(pos)
+        gap = max(4.0, random.gauss(AGE_GAP[age][0] * k, AGE_GAP[age][1] * k))
         ca = int(max(45, min(pa, pa - gap)))
         p = generate_player(pos, age, ca, pa=pa,
                             archetype_weights=lg.archetype_weights.get(pos))

@@ -29,6 +29,21 @@ INJURY_TYPES = {
     "Torn Achilles":       (0.8, 38, 52, 3),
 }
 
+# How much contact each role takes on one play, as a multiple of the base injury chance (the engine's
+# _injury_check). A ball carrier is hit on every touch, but so is a lineman on every snap: in the NFL
+# running backs are about a tenth of all injuries, the trenches about a third.
+EXPOSURE = {
+    "carrier": 0.28,      # whoever has the ball (runs, receptions, returns)
+    "tackler": 0.46,      # the man who makes the tackle
+    "target": 0.47,       # a contested incompletion: the receiver and his defender
+    "route": 0.095,       # one receiver running his route on a pass play (pulled muscles)
+    "cover": 0.11,        # one defensive back in coverage on a pass play (breaks, collisions)
+    "blocker": 0.22,      # one blocker (a lineman, or a tight end on runs), every run, pass or sack
+    "rusher": 0.155,      # one defensive lineman on the field, every run, pass or sack
+    "sack": 0.80,         # the quarterback on a sack (times the rules' QB protection)
+    "qb_hit": 0.30,       # the quarterback hit as he throws
+}
+
 _NAMES = list(INJURY_TYPES)
 _WEIGHTS = [INJURY_TYPES[n][0] for n in _NAMES]
 

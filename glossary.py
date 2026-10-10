@@ -89,8 +89,14 @@ RATING_DESC = [
     ("OVR (Overall)", "How good the player is right now at his position, 1-99. The scale is the same at "
                       "every position: 74 is an average starter, 82+ Pro Bowl level, 90+ elite. "
                       "A 74 kicker and a 74 quarterback are equally good at their jobs, not equally valuable."),
-    ("POT (Potential)", "The best he is ever likely to be. For players you haven't seen much of it is a scouted "
-                        "range. Past his prime a player's potential is simply his current rating."),
+    ("POT (Potential)", "The rating he reaches if his development goes well. About one young player in three "
+                        "gets there or beyond, most end a few points short and some well short. It is not fixed: "
+                        "each offseason (and at mid-season for young players) a year in which he grew faster than "
+                        "expected raises it, a stalled year lowers it, and work ethic, coaching, playing time and "
+                        "how he plays move it too, more the younger he is. Young players sit well below it (about "
+                        "18 points at 21 and 7 at 24) and grow fastest from 21 to 24, about 3 points a year; "
+                        "quarterbacks and kickers grow more slowly for longer. For players you haven't seen much "
+                        "it is a scouted range. Past his prime a player's potential is simply his current rating."),
     ("Role ratings", "How well a player fits each role at his position (for example Power Back vs Receiving "
                      "Back). They use the same 1-99 scale but weight the attributes that role needs."),
     ("Playing out of position", "Anyone can be put at any slot on the depth chart. His rating there (Slot OVR) "
@@ -178,6 +184,12 @@ GAMEDAY_DESC = [
      "The huddle gives a little back, the sideline a lot, halftime most of it. A tired player loses speed, "
      "strength and technique and is more likely to get hurt. Stamina decides how fast he tires. Heat and "
      "no-huddle offenses (which stop the defense substituting) wear players down faster."),
+    ("Injuries", "Anyone in the collision can get hurt, not just the ball carrier: the runner and the man "
+     "who tackles him, a receiver and his defender on a contested throw, the linemen on every snap, "
+     "receivers and defensive backs pulling muscles in their routes and coverage, and the quarterback when "
+     "he is sacked or hit as he throws. Linemen take a small knock every play, a ball carrier a bigger one "
+     "on each touch, so (as in the NFL) a running back is about a tenth of all injuries and the trenches "
+     "about a third. Durability, fatigue and the league's Injury Rate setting raise or lower every chance."),
     ("Rotation", "Your depth chart decides who plays. On every snap the staff checks how tired each starter "
      "is, and a fresher backup comes in to rest him when that is the better option at that moment. A starter "
      "is never benched just because someone listed behind him rates higher. Defensive linemen rotate the most, "

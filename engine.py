@@ -15,7 +15,7 @@ import random
 from collections import Counter
 
 from settings import settings
-from injuries import roll_injury
+from injuries import roll_injury, EXPOSURE as INJ_EXPOSURE
 import weather as wx
 import committee
 import staff as staff_mod
@@ -611,6 +611,10 @@ class GameSim:
         rate = self._fat_rate
         huddle = HUDDLE_REC * (0.35 if self.no_huddle else 1.0)
         on = set()
+        front = self._front_on = []          # defensive linemen on the field (trench contact)
+        recv = self._recv_on = []            # receivers on the field (route running)
+        tes = self._te_on = []               # tight ends on the field (they block on runs too)
+        dbs = self._db_on = []               # defensive backs on the field (coverage)
         ps = self.res.player_stats
         bust = self._bust
         bust.clear()
@@ -626,6 +630,16 @@ class GameSim:
                 on.add(p.id)
                 slot = slots[i] if slots is not None and i < len(slots) else p.position
                 self._at(p, slot)
+                base = fit.base_of(slot)
+                if key == "def_snaps":
+                    if base in ("DT", "EDGE"):
+                        front.append(p)
+                    elif base in ("CB", "S"):
+                        dbs.append(p)
+                elif base in ("WR", "TE"):
+                    recv.append(p)
+                    if base == "TE":
+                        tes.append(p)
                 if slot != p.position or p.converted_from:
                     ss = self.res.slot_snaps.setdefault(p.id, {})
                     ss[slot] = ss.get(slot, 0) + 1
@@ -2672,7 +2686,7 @@ class GameSim:
         side = random.choice(["left", "middle", "right"])
         out = {"kind": "pass", "yards": 0, "clock_runs": False, "time": 6,
                "text": f"{_short(qb.name)} pass {depth} {side} to {_short(rec.name)} {why}".replace("  ", " "),
-               "air": air, "ptype": ptype, "incomplete": True, "def": dfnd}
+               "air": air, "ptype": ptype, "incomplete": True, "def": dfnd, "target": rec}
         return out
 
     def _qb_aggression(self, qb):
@@ -3695,7 +3709,7 @@ class GameSim:
             self.st(tackler, "tkl_solo")
         if tfl:
             self.st(tackler, "tfl")
-        self._injury_check(tackler, 0.5)
+        self._injury_check(tackler, INJ_EXPOSURE["tackler"])
 
     # ── Resolving a play ─────────────────────────────────────────────────────
 
@@ -3748,15 +3762,34 @@ class GameSim:
             self.swing(off, 0.25)
         elif yards >= 20:
             self.swing(off, 0.13)
+        # Contact on the play (injuries.EXPOSURE): the ball carrier, a contested target and
+        # his defender, and the collisions in the trenches on every snap
         carrier = out.get("carrier")
         if carrier is not None:
-            self._injury_check(carrier, 1.0)
+            self._injury_check(carrier, INJ_EXPOSURE["carrier"])
+        if out.get("incomplete"):
+            self._injury_check(out.get("target"), INJ_EXPOSURE["target"])
+            self._injury_check(out.get("def"), INJ_EXPOSURE["target"])
         if kind == "sack":
-            self._injury_check(off.qb, 0.8 * self.rx["qb_injury"])
+            self._injury_check(off.qb, INJ_EXPOSURE["sack"] * self.rx["qb_injury"])
         elif kind == "pass" and out.get("complete") is None and random.random() < 0.05:
-            self._injury_check(off.qb, 0.3)
-        if random.random() < 0.25:
-            self._injury_check(random.choice(off.ol), 0.35)
+            self._injury_check(off.qb, INJ_EXPOSURE["qb_hit"])
+        if kind in ("run", "pass", "sack"):
+            blockers = off.ol
+            if kind == "run" and getattr(self, "_te_on", None):
+                blockers = off.ol + self._te_on
+            if blockers:
+                self._injury_check(random.choice(blockers), INJ_EXPOSURE["blocker"])
+            front = getattr(self, "_front_on", None)
+            if front:
+                self._injury_check(random.choice(front), INJ_EXPOSURE["rusher"])
+        if kind in ("pass", "sack"):
+            recv = getattr(self, "_recv_on", None)
+            if recv:
+                self._injury_check(random.choice(recv), INJ_EXPOSURE["route"])
+            dbs = getattr(self, "_db_on", None)
+            if dbs:
+                self._injury_check(random.choice(dbs), INJ_EXPOSURE["cover"])
 
         if out.get("safety"):
             self.run_clock(out["time"], False)
