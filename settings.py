@@ -77,7 +77,7 @@ SPEC = {
     "ai_personality_strength": (1.0, "AI", "How different CPU front offices are (0 = all alike)", "float",
                                 (0.0, 2.0, 0.1)),
     "holdout_rate":        (1.0, "AI", "Contract holdout frequency", "float", (0.0, 3.0, 0.1)),
-    "cpu_intelligence":    (1.0, "AI", "Difficulty: CPU staff intelligence (0.5 Rookie, 1 Pro, 1.5 All-Pro, "
+    "cpu_intelligence":    (1.0, "AI", "Difficulty: CPU coaching and front-office intelligence (0.5 Rookie, 1 Pro, 1.5 All-Pro, "
                                        "2 Hall of Fame)", "float", (0.0, 2.0, 0.1)),
 
     # ── Game ─────────────────────────────────────────────────────────────────

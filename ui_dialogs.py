@@ -928,7 +928,8 @@ def front_office_html(lg, team):
         parts.append(
             f"<h3>Plan: {mode}</h3>{fo.PLANS[mode]['desc']}<br>"
             f"<span style='color:{T('muted')}'>Why: {plan.get('reason', '—')}</span><br>"
-            + (f"Priorities: <b>{', '.join(focus)}</b><br>" if focus else "")
+            + ("Priorities:<br>" + "".join(f"&nbsp;&nbsp;• <b>{f}</b> — {fo.FOCUS_EFFECTS.get(f, '')}<br>"
+                                            for f in focus) if focus else "")
             + f"On this plan since {plan.get('since', lg.year)}"
             + (" · earlier: " + ", ".join(f"{m} (until {y})" for y, m in hist[-5:][::-1]) if hist else ""))
     c = team.coach
@@ -1210,9 +1211,10 @@ class NewGameDialog(QDialog):
             self.difficulty.addItem(name, v)
         cur = settings.get("cpu_intelligence", gameday.DEFAULT_IQ)
         self.difficulty.setCurrentIndex(min(range(len(levels)), key=lambda i: abs(levels[i][0] - cur)))
-        self.difficulty.setToolTip("How sharp CPU coaching staffs are: how well they scout you, game-plan "
-                                   "and adjust during games. Player ratings are never changed. Pro is "
-                                   "realistic; you can fine-tune it later in Settings > AI.")
+        self.difficulty.setToolTip("How sharp CPU clubs are: how well their coaches scout you, game-plan "
+                                   "and adjust during games, and how well their front offices judge players "
+                                   "and trades. Player ratings are never changed. Pro is realistic; you can "
+                                   "fine-tune it later in Settings > AI.")
         form.addWidget(self.difficulty)
         root.addLayout(form)
         era_note = QLabel("Every league begins from a different, era-neutral landscape. From there "

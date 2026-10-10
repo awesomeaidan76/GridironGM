@@ -407,13 +407,17 @@ def maybe_offer_user(lg, chance=0.35):
     lg.trade_offers = [o for o in lg.trade_offers if o.get("expires", 0) >= _clock(lg)]
     if len(lg.trade_offers) >= 4:
         return None
-    team = random.choice(_ai_teams(lg))
+    # Buyers and wheeler-dealers pick up the phone
+    team = _weighted(_ai_teams(lg), lambda t: 0.3 + _buyer_w(lg, t) + 0.5 * fo.activity(t))
+    if team is None:
+        return None
     needs = team.needs()
     cands = [p for p in _sellable(user, 66) if needs.get(p.position, 0) > 0.15]
     if not cands:
         return None
     target = max(cands, key=lambda p: needs.get(p.position, 0) * 30 + p.ovr + random.uniform(0, 8))
-    want = trade_value(target, lg, None) * random.uniform(1.0, 1.15)
+    # What he is worth to them, less the margin a GM keeps for himself
+    want = trade_value(target, lg, team) / (1.10 * fo.demand(team)) * random.uniform(0.85, 1.0)
     # Offer a player at a position the user needs, topped up with picks
     un = user.needs()
     give = []
@@ -431,6 +435,9 @@ def maybe_offer_user(lg, chance=0.35):
         return None
     if not _cap_ok(lg, team, [target], [g for g in give if not is_pick(g)]):
         return None
+    from trades import evaluate
+    if not evaluate(lg, user, team, [target], give)[0]:
+        return None                       # they would not sign off on it themselves
     offer = {"from": team.abbr, "give": [_ref(a) for a in give], "get": [_ref(target)],
              "expires": _clock(lg) + 2, "made": lg.week_label}
     lg.trade_offers.append(offer)
@@ -469,11 +476,15 @@ def accept_offer(lg, offer):
     if any(a is None for a in give + get):
         return False, "The offer is no longer valid."
     # The user gives `get`, receives `give`
-    ok, msg, _, _ = evaluate(lg, lg.user_team, team, get, give)
+    ok, msg, vin, vout = evaluate(lg, lg.user_team, team, get, give)
     if not ok and "accept" not in msg:
-        # The AI made the offer, so it accepts; only legality checks matter
+        # The AI made the offer, so a small shortfall stands; legality, or a deal that has
+        # turned clearly bad for them (the player got hurt, their needs changed), does not
         if "deadline" in msg or "playoffs" in msg or "cap" in msg or "roster" in msg or "own" in msg:
             return False, msg
+        if vin < vout * 0.95:
+            lg.trade_offers.remove(offer)
+            return False, f"{team.full_name} have pulled the offer: the deal no longer works for them."
     execute(lg, lg.user_team, team, get, give)
     lg.trade_offers.remove(offer)
     return True, "Trade completed."
@@ -492,7 +503,7 @@ BLOCK_KINDS = ("any", "players", "picks")
 def _ai_budget(lg, team, incoming):
     """Most value this club would hand over for `incoming` and still say yes (see trades.evaluate)."""
     will = max(0.05, settings["ai_trade_willingness"])
-    val_in = _value(lg, incoming, team)
+    val_in = fo.package_in(lg, team, incoming, [], lambda a: trade_value(a, lg, team))
     return max(0.0, (val_in - 1.0) / ((1.10 / will) * fo.demand(team)))
 
 

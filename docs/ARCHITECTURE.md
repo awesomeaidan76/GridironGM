@@ -435,15 +435,38 @@ Every CPU club has three decision makers, all plain data plus small functions:
 - Each plan sets multipliers on pick, youth and veteran value, appetite to buy and sell, free-agent spending and playing time for the kids.
 - `choose_plan` scores every plan from an assessment of the club: roster rank, last record, core age, young starters, stars, QB status, next year's cap load, owner mood and GM traits.
 - It adds noise and hysteresis (the current plan gets a bonus, more while it is committed).
+- A GM on the hot seat (`hot_seat`: his last three seasons against the owner's bar, softened in the first
+  seasons of a rebuild) leans toward buying and away from rebuilding.
 - Plans are set after each season and reviewed two weeks before the trade deadline (`update_plans`).
+- The plan's priorities (`_focus`, explained by `FOCUS_EFFECTS`) each change behaviour: QB search and
+  grooming a successor (trade value and draft board), developing a young QB (no blocking veteran signings),
+  a tight cap (smaller re-signing and free-agency budgets), a closing window and the hot seat (veterans up,
+  future picks down), and locking up the young core (early extensions).
 
 **One valuation feeds every decision:**
+- `trades.trade_value` is on the draft-pick chart's scale (`roster_rules.pick_value`). A player's worth grows
+  exponentially with his position-relative OVR (`talent_value`: `TV_BASE × e^((OVR − 74) / TV_SCALE) ×
+  POSITION_VALUE`, flattening above 90), plus a share of the gap to the peak his club's scouts see
+  (`front_office.seen_pa`), less `AGE_DECAY` a year past his position's usual prime (`ratings.AGE_CURVES`),
+  plus contract surplus. An average starter at EDGE is worth about a third-round pick, an 85 about the first
+  overall pick.
+- Scouting fog (`seen_pa`): current ratings are public, potential is not. A CPU club knows its own players;
+  for others it reads the scouts' range through its own scouting department (sharpened by the difficulty
+  dial) with a lean of its own, fixed for the season.
 - `player_mult` covers age by plan and trait, position value, stars or depth, loyalty to his own players, QB search, injury risk, coach-led scheme fit and a hot-seat veteran bias, plus a judgement error that stays fixed for the season.
 - Position value blends a traditional table with an analytics table and leans with the league's pass rate. Analytics GMs read the last three seasons; old-school GMs read the last fifteen.
 - `pick_mult` uses the plan and patience. `demand` uses hardness.
 
+**Packages** (`package_in`, `lineup_loss`, used by `trades.package_values` in `evaluate`):
+- Each incoming player is worth his value times his `role` on the receiving club after the deal (starter
+  1.0, rotation 0.65, prospect 0.55, depth 0.30).
+- Pieces are added biggest first, each extra one worth `EXTRA_PIECE` less, so several good players rarely
+  buy a star.
+- What a club gives up is valued half through its own eyes and half at the market price, plus, for a club
+  trying to win now (`WIN_NOW` by plan), `LINEUP_WEIGHT` of the value this season's starting lineup loses.
+
 **Where the valuation is used:**
-- `trades.trade_value` and `evaluate`: the CPU side values what it gives up through its own eyes.
+- `trades.evaluate`: the user's proposals, through `package_values`.
 - `market.py`:
   - buyers and sellers are chosen by plan and activity;
   - blockbusters for stars by all-in clubs;
@@ -452,7 +475,10 @@ Every CPU club has three decision makers, all plain data plus small functions:
   - both sides must agree;
   - the user's trading block (`block_offers`): each club's budget is the most it would give and
     still pass `trades.evaluate`, and it fills that with the best players or picks for the user;
-  - `make_it_work` searches the user's picks and players for the cheapest addition that passes `evaluate`.
+  - `make_it_work` searches the user's picks and players for the cheapest addition that passes `evaluate`;
+  - offers to the user come from buyers and active GMs, value the target through the caller's eyes and
+    must pass the caller's own `evaluate`; accepting re-checks it, and an offer that has turned clearly bad
+    for the club (the player got hurt) is pulled.
 - `draft.board_value`: risk weights ceiling over polish, the BPA trait weights need, and QB search adds weight to quarterbacks.
 - Draft-day trade-downs and trade-ups.
 - `free_agency.ai_free_agency_wave`:
@@ -461,7 +487,18 @@ Every CPU club has three decision makers, all plain data plus small functions:
   - value hunters chase bargains;
   - rebuilders skip 29+;
   - analytics GMs protect compensatory picks.
-- `ai_resign`: loyalty, cap discipline and plan age limits.
+- Re-signing (`resign_choices`, run by `free_agency.ai_resign`): `cap_plan` budgets next season without
+  the expiring deals, keeps back the rookie pool (`rookie_pool`), minimum bodies and the GM's reserve, and
+  fills `CAP_USE` of the cap by plan. Wanted players (`resign_wanted`: depth rank, age against the position's
+  prime plus `RESIGN_AGE`, plan) are kept in order of trade value; stars and cheap starters may stretch to
+  the hard cap. Players may test the market (`tests_market`: ambition against the club's appeal).
+- Early extensions (`extension_targets`, run by `free_agency.ai_extensions` at the end of the re-signing
+  window): young core players in the last year of a deal, more often with the young-core priority and
+  sharper judgement, within the cap plan.
+- Training (`offseason_training`, before camp): each CPU player's training focus. Young players work on the
+  most important group where they are weakest, veterans past their prime on Physical; the staff's teaching
+  rating (sharpened by the dial) sets how often it gets the call right. `team.depth_score` gives the plan's
+  youth playing time to young players by their upside.
 - `hire_coach`: a slate of candidates, scored by `coach_fit`.
 - Coach firing: owner patience, rebuild grace, and new GMs bringing their own coach.
 
@@ -473,8 +510,12 @@ Every CPU club has three decision makers, all plain data plus small functions:
 - The GM carousel: firing by owner patience and ambition. Replacements come from the pool, a successful front office's lieutenant, or a new archetype weighted by recent champions, the owner's taste, scarcity, and contrast with the man who failed.
 
 Settings: `gm_hot_seat` and `ai_personality_strength`, alongside the existing AI sliders. `cpu_intelligence`
-(difficulty) currently sharpens CPU game-day staffs (section 3, item 5); front-office and depth-chart
-decisions will read the same dial.
+(difficulty) sharpens CPU game-day staffs (section 3, item 5) and front offices (`fx`): GM judgement
+(`judgement`, so the per-player error shrinks), the scouting department reading potential (`seen_pa`), the
+noise in choosing a plan, training choices, and `smarts` (how fully `package_in` and `lineup_loss` apply).
+It never touches ratings. `tools/fo_probe.py` checks it: lopsided offers (2-3 depth players for a star or a
+starting QB) and fair swaps against every CPU club, and with `--season` a season's trades, young stars lost
+in re-signing, extensions and payrolls.
 
 ## 5. How eras emerge (no presets)
 

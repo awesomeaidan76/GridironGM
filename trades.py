@@ -3,10 +3,10 @@ trades.py — player and draft-pick trades: valuation and AI acceptance.
 
 A trade asset is either a Player or a pick tuple ("pick", year, round, original team).
 """
-import random
+import math
 
 from contracts import market_value, fmt_money
-from ratings import POSITION_VALUE, ROSTER_MINIMUM
+from ratings import POSITION_VALUE, ROSTER_MINIMUM, AGE_CURVES, ovr_from_ca
 from settings import settings
 import roster_rules as rr
 import front_office as fo
@@ -23,8 +23,28 @@ def asset_label(lg, asset):
     return f"{asset.position} {asset.name}"
 
 
+# A player's worth, on the same scale as the draft-pick chart (roster_rules.pick_value: the #1 pick
+# is about 53, the 32nd about 30, a mid third-rounder about 13). Value grows exponentially with
+# his position-relative rating, so a star is worth several good starters: a 74 OVR (average) EDGE
+# is worth about a third-round pick, an 85 about the first overall pick, a 90 about two firsts.
+TV_BASE = 26.0        # an average starting quarterback (74 OVR) in his prime
+TV_SCALE = 10.0       # OVR points that multiply a player's value by e
+TV_KNEE = 16.0        # above 90 OVR the curve flattens (nobody trades a 99 for ten firsts)
+UPSIDE_SHARE = 0.65   # share of the gap to his projected peak that a club pays for now
+UPSIDE_DECAY = 0.92   # ...discounted for each year until he gets there
+AGE_DECAY = 0.14      # value lost per year past his position's usual prime (ratings.AGE_CURVES)
+
+
+def talent_value(ovr, pos):
+    """What a player of this rating at this position is worth, in his prime, before his contract."""
+    x = ovr - 74.0
+    if x > TV_KNEE:
+        x = TV_KNEE + (x - TV_KNEE) * 0.6
+    return TV_BASE * math.exp(x / TV_SCALE) * POSITION_VALUE[pos]
+
+
 def trade_value(p, lg, team=None):
-    """How much a team values acquiring this player or pick (arbitrary units)."""
+    """How much a team values acquiring this player or pick (pick-chart units)."""
     if is_pick(p):
         _, y, r, o = p
         v = rr.pick_value(lg, y, r, o)
@@ -36,11 +56,13 @@ def trade_value(p, lg, team=None):
             pos = ranks.index(team.abbr) / 31.0 if team.abbr in ranks else 0.5
             v *= 0.85 + 0.30 * pos
         return v
-    ability = max(0.0, p.ca - 70) ** 1.55 / 12.0
-    youth = max(0, p.pa - p.ca) * max(0, 27 - p.age) * 0.06
-    age_mult = 1.0 - max(0, p.age - 29) * 0.10
-    pos = POSITION_VALUE[p.position] ** 0.6
-    v = (ability + youth) * max(0.25, age_mult) * pos
+    v = talent_value(p.ovr, p.position)
+    # Upside: what he could become, as far as this club's scouts can tell
+    peak = fo.seen_pa(lg, team, p)
+    if peak > p.ca and p.age <= 27:
+        fut = talent_value(ovr_from_ca(peak, p.position), p.position)
+        v += (fut - v) * UPSIDE_SHARE * UPSIDE_DECAY ** max(1.0, p.years_to_peak())
+    v *= max(0.2, 1.0 - max(0, p.age - AGE_CURVES[p.position][1]) * AGE_DECAY)
     if p.contract:
         surplus = (market_value(p, lg.salary_cap) - p.salary) / lg.salary_cap * 100
         v += surplus * min(3, p.contract["years"]) * 0.6
@@ -84,12 +106,8 @@ def evaluate(lg, user_team, ai_team, give, get):
     for _, y, r, o in _picks(get):
         if rr.pick_owner(lg, y, r, o) != ai_team.abbr:
             return False, f"{ai_team.full_name} no longer own one of those picks.", 0, 0
-    val_in = sum(trade_value(a, lg, ai_team) for a in give)
-    # What the AI gives up, valued through its own eyes (a rebuilding club lets veterans go cheaply,
-    # a loyal GM hates parting with his own players)
-    val_out = sum(trade_value(a, lg, ai_team) for a in get) * 0.5 + \
-        sum(trade_value(a, lg, None) for a in get) * 0.5
     gp, tp = _players(give), _players(get)
+    val_in, val_out = package_values(lg, ai_team, give, get)
     # Cap check for both sides
     if settings["hard_cap"]:
         user_after = user_team.payroll - sum(p.salary for p in gp) + sum(p.salary for p in tp)
@@ -129,6 +147,23 @@ def evaluate(lg, user_team, ai_team, give, get):
     return False, msg, val_in, val_out
 
 
+def package_values(lg, team, incoming, outgoing):
+    """
+    A club's view of a deal: (value of what it gets, value of what it gives up).
+    What it gets is worth what each piece adds to its roster (front_office.package_in).
+    What it gives up is valued half through its own eyes (a rebuilding club lets veterans go
+    cheaply, a loyal GM hates parting with his own players) and half at the market price,
+    plus, for a club trying to win now, the hole the deal leaves in this season's lineup.
+    """
+    val_in = fo.package_in(lg, team, incoming, outgoing, lambda a: trade_value(a, lg, team))
+    val_out = sum(trade_value(a, lg, team) for a in outgoing) * 0.5 + \
+        sum(trade_value(a, lg, None) for a in outgoing) * 0.5
+    if fo.gm_of(team) is not None:
+        val_out += fo.lineup_loss(lg, team, _players(incoming), _players(outgoing),
+                                  lambda p: talent_value(p.ovr, p.position))
+    return val_in, val_out
+
+
 def execute(lg, team_a, team_b, a_gives, b_gives, why=None):
     for a in a_gives:
         if is_pick(a):
@@ -158,63 +193,3 @@ def execute(lg, team_a, team_b, a_gives, b_gives, why=None):
     text = f"TRADE: {team_a.abbr} send {a_names} to {team_b.abbr} for {b_names}"
     lg.add_transaction(text)
     lg.add_news("Trade", text + (f". {why}" if why else ""), team_a.abbr)
-
-
-def ai_trade_market(lg, chance=0.18):
-    """Occasional AI-to-AI trades so the league feels alive."""
-    teams = [t for t in lg.teams.values() if t.abbr != lg.user_abbr]
-    if len(teams) < 2:
-        return None
-    if random.random() < 0.22 * settings["ai_trade_willingness"]:
-        _veteran_for_pick(lg, teams)
-    if random.random() > chance * settings["ai_trade_willingness"]:
-        return None
-    a, b = random.sample(teams, 2)
-    na, nb = a.needs(), b.needs()
-    pos_b_needs = max(nb, key=nb.get)
-    pos_a_needs = max(na, key=na.get)
-    if pos_a_needs == pos_b_needs:
-        return None
-    a_has = sorted(a.players_at(pos_b_needs), key=lambda p: -p.ca)
-    b_has = sorted(b.players_at(pos_a_needs), key=lambda p: -p.ca)
-    if len(a_has) < 2 or len(b_has) < 2:
-        return None
-    pa_, pb_ = a_has[1], b_has[1]
-    va, vb = trade_value(pa_, lg, b), trade_value(pb_, lg, a)
-    if min(va, vb) <= 0 or max(va, vb) / max(0.01, min(va, vb)) > 1.25:
-        return None
-    if settings["hard_cap"] and (a.payroll - pa_.salary + pb_.salary > lg.salary_cap or
-                                 b.payroll - pb_.salary + pa_.salary > lg.salary_cap):
-        return None
-    execute(lg, a, b, [pa_], [pb_])
-    return (a.abbr, b.abbr)
-
-
-def _veteran_for_pick(lg, teams):
-    """A rebuilding team sells a good veteran to a contender for a draft pick."""
-    ranks = sorted(teams, key=lambda t: -t.overall)
-    contenders, sellers = ranks[:8], ranks[-10:]
-    seller = random.choice(sellers)
-    buyer = random.choice(contenders)
-    vets = [p for p in seller.players_at_any() if p.age >= 28 and p.ovr >= 76 and rr.is_active(p)]
-    if not vets:
-        return None
-    p = random.choice(vets)
-    need = buyer.needs().get(p.position, 0)
-    have = [x.ovr for x in buyer.players_at(p.position)]
-    upgrade = not have or p.ovr > sorted(have, reverse=True)[min(len(have), 2) - 1]
-    if need < 0.08 and not upgrade:
-        return None
-    if settings["hard_cap"] and buyer.payroll + p.salary > lg.salary_cap:
-        return None
-    want = trade_value(p, lg, buyer)
-    picks = sorted(rr.tradable_picks(lg, buyer.abbr),
-                   key=lambda k: abs(rr.pick_value(lg, *k) - want))
-    if not picks:
-        return None
-    y, r, o = picks[0]
-    pv = rr.pick_value(lg, y, r, o)
-    if not (0.6 * want <= pv <= 1.5 * want):
-        return None
-    execute(lg, seller, buyer, [p], [("pick", y, r, o)])
-    return (seller.abbr, buyer.abbr)

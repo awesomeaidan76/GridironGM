@@ -851,6 +851,25 @@ def main():
         for p in t.roster:
             p.injury = None
     step("difficulty and game plans")
+    # Front office: a star costs far more than a handful of depth players; priorities are explained
+    import front_office as fo
+    import trades
+    from ratings import POSITION_DISPLAY_GROUPS
+    from ui_dialogs import front_office_html
+    cpu = [t for t in lg2.teams.values() if t.abbr != lg2.user_abbr]
+    star_club, star = max(((t, p) for t in cpu for p in t.roster), key=lambda tp: trades.trade_value(tp[1], lg2, None))
+    depth = sorted([p for p in lg2.user_team.roster if p.position not in ("QB", "K", "P") and p.ovr <= 79],
+                   key=lambda p: -p.ovr)[:3]
+    vin, vout = trades.package_values(lg2, star_club, depth, [star])
+    assert vin < vout * 1.1, (star.name, vin, vout)
+    assert trades.talent_value(90, "EDGE") > 2.5 * trades.talent_value(78, "EDGE")
+    assert fo.seen_pa(lg2, star_club, star) == star.pa
+    t = next((t for t in cpu if fo.focus_of(t)), None)
+    if t is not None:
+        assert fo.FOCUS_EFFECTS[fo.focus_of(t)[0]] in front_office_html(lg2, t)
+    assert all(fo.training_choice(lg2, star_club, p) in [None] + list(POSITION_DISPLAY_GROUPS[p.position])
+               for p in star_club.roster[:12])
+    step("front office valuation")
     assert any(DIAG_SEEN), "no play diagrams were drawn"
     assert {"offer", "ir", "expiring", "draft"} <= INBOX_KINDS, INBOX_KINDS
     print("negotiations:", [(n, r) for n, r, _ in NEGOTIATIONS][:8])
