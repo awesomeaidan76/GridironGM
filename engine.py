@@ -29,6 +29,7 @@ import situations as sit_lib
 import position_fit as fit
 import packages
 import gameday
+import substitutions as sub
 from coach import sit_tendency, SCHEME_EXECUTION
 
 QUARTER = 900
@@ -40,6 +41,10 @@ DEF_POS = {"DT", "EDGE", "LB", "CB", "S"}
 # Energy runs 0-100. Every snap on the field costs energy (big men and pass
 # rushers burn it fastest); the huddle gives a little back, the sideline a lot.
 # Tired players lose physical sharpness and get hurt more, so coaches rotate.
+# Base injury chance per unit of exposure (injuries.EXPOSURE). Starters who stay in on the snaps
+# that matter and carry workload from week to week are tired more often, so this sits a little
+# lower than before to keep about 0.76 injuries per team-game.
+INJURY_BASE = 0.0122
 RUN_BLOCK_SHIFT = 0.0      # calibration offset for the matchup-based run blocking edge
 PASS_RUSH_BASE = -2.46      # per-matchup log-odds of a rusher winning (calibrated to NFL pressure rates)
 DRAIN = {"QB": 0.35, "RB": 1.9, "FB": 1.5, "WR": 1.25, "TE": 1.35, "OT": 0.75, "IOL": 0.75,
@@ -84,6 +89,9 @@ def _short(name):
 # ── Result container ──────────────────────────────────────────────────────────
 
 class GameResult:
+    returned = ()                         # (older saves) players who came back after a knock
+    wear = None                           # pid -> end-of-game fatigue (read by season, then dropped)
+
     def __init__(self, home, away, week, season, playoff=None):
         self.home = home
         self.away = away
@@ -108,6 +116,7 @@ class GameResult:
         self.states = []
         self.diagrams = []                # parallel to plays: play diagram dict or None
         self.slot_snaps = {}              # pid -> {slot: snaps} for snaps away from his own position
+        self.returned = []                # players who came back into the game after a knock
 
     @property
     def winner(self):
@@ -147,7 +156,41 @@ class Side:
         self.timeouts = 3
         self.sim = sim
         self.disc = team.discipline
+        self._substitution_identity()
         self.refresh_lineup()
+
+    def _substitution_identity(self):
+        """
+        How this staff substitutes today (substitutions.py): the head coach's rotation style
+        per group unless the user picked one on the Depth Chart, how sharply he keeps his best
+        players in on the snaps that matter (game management), how protective he is, and for a
+        CPU staff that wants to play its kids, early-down reps for its prospects.
+        """
+        t = self.team
+        c = t.coach
+        user = t.tactics is not None
+        self.rot_style = sub.coach_rotation(c)
+        self.protect = sub.coach_protect(c)
+        self.policy = t.injury_policy if user else None
+        chosen = (t.rotation or {}) if user else {}
+        self.rotk = {}
+        for grp in sub.GROUPS:
+            style = chosen.get(grp)
+            self.rotk[grp] = ROTATION_STYLE[style] * sub.GROUP_SCALE.get(grp, 1.0) if style in ROTATION_STYLE \
+                else sub.group_rotation(self.rot_style, grp)
+        gm = c.r("game_management")
+        self.levk = {lv: sub.leverage_mult(lv, gm) for lv in sub.LEVERAGE}
+        self.kids = 0.0 if user else max(0.0, t.youth_boost)
+        self.dev_reps = {}
+        if not user:
+            credit = t.youth_boost
+            yt = getattr(c, "youth_trust", None)
+            if yt is not None:
+                credit += (yt - 0.5) * 4.0
+            for p in t.roster:
+                b = sub.dev_rep_bonus(credit, p.age, p.pa - p.ca)
+                if b > 0:
+                    self.dev_reps[p.id] = b
 
     def refresh_lineup(self):
         t = self.team
@@ -291,6 +334,16 @@ class GameSim:
         self.fat = {}                   # pid -> attribute penalty from fatigue
         self._rat = {}                  # (pid, pos) -> rating, cached for rotation decisions
         self.no_huddle = False
+        self._lev = "normal"            # how much the current snap matters (substitutions.leverage)
+        self._snapn = 0
+        self._knocks = []               # (snap, player, side): knocks the trainers are looking at
+        # Workload from recent games: a worn-down player starts the game short of full energy
+        for side in (self.home, self.away):
+            for p in side.team.roster:
+                w = sub.kickoff_wear(p.load)
+                if w > 0:
+                    self.wear[p.id] = w
+                    self._set_en(p.id, 100.0 - w)
         self._motion_kind = None
 
         self.weather = wx.roll_weather(home.abbr, week, playoff, neutral) \
@@ -441,6 +494,8 @@ class GameSim:
             f = personal + u + hfa + morale + motivation + lead
             if self.playoff:
                 f += (p.hidden.get("big_game", 50) - 50) / 50.0 * 2.5
+            if p.injury is not None and p.injury.get("play"):
+                f -= sub.HURT_FORM                 # playing through an injury
             self.form[p.id] = f
             temper = p.hidden.get("temperament", 50)
             steady = (getattr(side, "leadership", 70) - 70) / 100.0
@@ -537,10 +592,12 @@ class GameSim:
             self.fat.pop(pid, None)
 
     def _garbage(self, side):
-        """Blowout late in the game: starters come out."""
-        if self.quarter < 4 or self.clock > 420 or self.quarter > 4:
+        """A blowout in the final minute: this staff sends in its backups (never earlier)."""
+        if self.quarter != 4 or self.clock > sub.GARBAGE_CLOCK:
             return False
-        return abs(side.score - self.other(side).score) >= 24
+        diff = side.score - self.other(side).score
+        return abs(diff) >= sub.garbage_margin(side.protect, side.kids, bool(self.playoff), diff > 0,
+                                               side.policy)
 
     def _rating(self, p, pos):
         key = (p.id, pos)
@@ -574,18 +631,23 @@ class GameSim:
                 if pos != "QB":
                     out = (bench + out)[:n]
             elif not lock:
-                style = (getattr(side.team, "rotation", None) or {}).get(ROT_GROUP.get(rot_pos, ""), "normal")
-                k = POS_ROTATION.get(rot_pos, 0.8) * ROTATION_STYLE.get(style, 1.0)
+                # the coach's rotation style for this group, and how much this snap matters
+                k = POS_ROTATION.get(rot_pos, 0.8) * side.rotk.get(ROT_GROUP.get(rot_pos, ""), 1.0) \
+                    * side.levk[self._lev]
                 if k > 0:
                     cand = out + bench
                     env = [self._rating(p, pos) for p in cand]
                     for i in range(len(env) - 2, -1, -1):
                         if env[i + 1] > env[i]:
                             env[i] = env[i + 1]
+                    reps = side.dev_reps if self._lev == "low" else None
                     val = {}
                     for i, p in enumerate(cand):
                         en = self.energy_of(p)
-                        val[p.id] = env[i] * (1.0 - k * max(0.0, 94.0 - en) / 100.0 * 1.15)
+                        v = env[i] * (1.0 - k * max(0.0, 94.0 - en) / 100.0 * 1.15)
+                        if reps:
+                            v *= 1.0 + reps.get(p.id, 0.0)       # early-down reps for a prospect
+                        val[p.id] = v
                     for i, s_ in enumerate(out):
                         if not bench:
                             break
@@ -1623,6 +1685,10 @@ class GameSim:
     # ── A single snap ────────────────────────────────────────────────────────
 
     def snap(self):
+        self._snapn += 1
+        if self._knocks:
+            self._knock_returns()
+        self._lev = sub.leverage(self.down, self.yl, self.quarter, self.clock, self.poss.score - self.dfn.score)
         self.cur_diag = None
         self._adv = None
         self._adv_void = False
@@ -3955,11 +4021,15 @@ class GameSim:
     # ── Injuries ─────────────────────────────────────────────────────────────
 
     def _injury_check(self, player, exposure):
-        if player is None or player.is_injured or self.inj_rate <= 0:
+        if player is None or self.inj_rate <= 0:
             return
+        if player.injury is not None:
+            if not player.injury.get("play"):
+                return
+            exposure *= sub.HURT_EXPOSURE          # playing hurt: he can aggravate it
         res = player.a("injury_resistance")
         tired = 1.0 + max(0.0, 80.0 - self.energy_of(player)) / 60.0     # tired bodies break down
-        p = 0.0125 * exposure * (1.55 - res / 100.0) * self.inj_rate * tired
+        p = INJURY_BASE * exposure * (1.55 - res / 100.0) * self.inj_rate * tired
         if random.random() >= p:
             return
         weeks_left = 17
@@ -3971,6 +4041,29 @@ class GameSim:
         qb_before = side.lu["QB"][0] if side.lu["QB"] else None
         side.refresh_lineup()
         self._replan(side, player, qb_before)
+        if inj["weeks"] <= 0:
+            # a knock: the trainers look at him and the staff decides whether he goes back in
+            self._knocks.append((self._snapn + random.randint(*sub.KNOCK_SNAPS), player, side))
+
+    def _knock_returns(self):
+        due = [k for k in self._knocks if k[0] <= self._snapn]
+        if not due:
+            return
+        self._knocks = [k for k in self._knocks if k[0] > self._snapn]
+        for _, player, side in due:
+            inj = player.injury
+            if inj is None or inj.get("weeks", 1) > 0 or self.game_over:
+                continue
+            diff = side.score - self.other(side).score
+            if random.random() >= sub.knock_return_chance(side.protect, diff, bool(self.playoff), side.kids,
+                                                          side.policy):
+                continue
+            player.injury = None
+            self.res.returned.append(player.id)
+            qb_before = side.lu["QB"][0] if side.lu["QB"] else None
+            side.refresh_lineup()
+            self._replan(side, player, qb_before)
+            self.log(f"{player.name} ({player.position}, {side.abbr}) returned to the game", "note")
 
     def _replan(self, side, player, qb_before):
         """After an injury both staffs adjust: the hurt side's plan, and the opponent's plan for it."""
@@ -3985,7 +4078,8 @@ class GameSim:
             self._game_plan(side, opp, defense=False)
             qb = side.lu["QB"][0] if side.lu["QB"] else None
             if qb is not None and qb is not qb_before:
-                self.log(f"The {opp.team.name} defense adjusts for backup QB {qb.name}", "note")
+                who = f"{qb.name}, back in the game" if qb is player else f"backup QB {qb.name}"
+                self.log(f"The {opp.team.name} defense adjusts for {who}", "note")
         elif pos in ("CB", "S", "LB", "EDGE", "DT"):
             self._game_plan(opp, side, defense=False)       # attack the replacement
 
@@ -4013,6 +4107,9 @@ class GameSim:
                               if d.get("rz") and d["result"] == "Touchdown")
         res.home_score = self.home.score
         res.away_score = self.away.score
+        # Fatigue everyone who played carries out of the game (season.py turns it into workload)
+        res.wear = {pid: round(self.wear.get(pid, 0.0), 2) for pid, line in res.player_stats.items()
+                    if line["off_snaps"] or line["def_snaps"]}
         # Game grades for everyone who played
         for pid, line in res.player_stats.items():
             grades.stamp(line, res.player_meta[pid][1])

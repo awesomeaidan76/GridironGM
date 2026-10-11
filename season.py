@@ -25,6 +25,7 @@ import eras
 import front_office as fo
 import free_agency as fa
 import position_fit as fit
+import substitutions as sub
 from coach import hire_from_tree, generate_coach
 from development import develop, retirement_chance
 from engine import simulate_game
@@ -162,6 +163,7 @@ def start_new_season(lg, first=False):
 
 
 def _offseason_heal(p):
+    p.load = 0.0                            # the offseason takes the season's wear away
     if p.injury:
         p.injury["weeks"] = p.injury.get("weeks", 0) - 26
         if p.injury["weeks"] <= 0:
@@ -197,6 +199,7 @@ def play_week(lg):
     if lg.phase != "regular" or lg.week >= len(lg.schedule):
         return []
     results = []
+    fo.game_week_prep(lg, [a for g in lg.schedule[lg.week] for a in g])
     for home, away in lg.schedule[lg.week]:
         res = simulate_game(lg.teams[home], lg.teams[away], week=lg.week + 1, season=lg.year,
                             rules=lg.rules, diagrams=lg.user_abbr in (home, away), **_staff_args(lg, home, away))
@@ -215,9 +218,14 @@ def _apply_game(lg, res, playoff):
     for text in records_mod.update_game_records(lg, res)[:2]:
         lg.add_news("Performance", text, None)
     lookup = {}
+    wear = res.wear or {}
     for abbr in (res.home, res.away):
         for p in lg.teams[abbr].roster:
             lookup[p.id] = p
+            # Workload: a heavy game adds to it, a week without snaps takes most of it away
+            w = wear.get(p.id)
+            p.load = sub.update_load(p.load, w, p.position) if w is not None else sub.rest_load(p.load)
+    res.wear = None                         # not kept in the saved results
     for abbr in (res.home, res.away):
         opp = res.opponent(abbr)
         mine, theirs = res.score_of(abbr), res.score_of(opp)
@@ -247,6 +255,12 @@ def _apply_game(lg, res, playoff):
 
 
 def _post_week(lg, results):
+    # Teams on a bye rest
+    played = {a for r in results for a in (r.home, r.away)}
+    for team in lg.teams.values():
+        if team.abbr not in played:
+            for p in team.roster:
+                p.load = sub.rest_load(p.load)
     # Injury clock
     for team in lg.teams.values():
         for p in team.roster:
@@ -403,6 +417,7 @@ def play_playoff_round(lg):
         finalists = [v[0] for v in lg.playoff_alive.values() if v]
         a, b = finalists[0], finalists[1]
         home, away = (a, b) if lg.standings[a].sort_key() >= lg.standings[b].sort_key() else (b, a)
+        fo.game_week_prep(lg, [home, away], playoff=True)
         res = simulate_game(lg.teams[home], lg.teams[away], week=99, season=lg.year,
                             playoff=name, neutral=True, rules=lg.rules,
                             diagrams=lg.user_abbr in (home, away), **_staff_args(lg, home, away))
@@ -425,6 +440,7 @@ def play_playoff_round(lg):
         return results
 
     lg.playoff_round += 1
+    fo.game_week_prep(lg, [a for alive in lg.playoff_alive.values() for a in alive], playoff=True)
     for conf, alive in lg.playoff_alive.items():
         alive.sort(key=lambda a: _seed_index(lg, a))
         count = len(alive)
@@ -444,6 +460,12 @@ def play_playoff_round(lg):
             lg.playoff_exit[loser] = lg.playoff_round
             if name == "Conference Championship":
                 lg.teams[res.winner].conf_titles += 1
+    played = {a for r in results for a in (r.home, r.away)}
+    for alive in lg.playoff_alive.values():
+        for a in alive:
+            if a not in played:              # a first-round bye
+                for p in lg.teams[a].roster:
+                    p.load = sub.rest_load(p.load)
     _post_playoff_injuries(lg)              # once per round, not once per conference
     _position_learning(lg, results, [lg.teams[a] for r in results for a in (r.home, r.away)])
     lg.playoff_results[name] = results
@@ -551,6 +573,7 @@ def end_season(lg):
             _archive(lg, p, "FA")
         p.last_season_gp = p.season_stats["gp"]
         p.last_season_gs = p.season_stats["gs"]
+        p.last_season_snaps = p.season_stats["off_snaps"] + p.season_stats["def_snaps"]
 
     _update_reputations(lg)
     fo.season_end(lg)
@@ -646,6 +669,7 @@ def _archive(lg, p, abbr):
     p.ca_history[lg.year] = p.ca
     p.last_season_gp = s["gp"]
     p.last_season_gs = s["gs"]
+    p.last_season_snaps = s["off_snaps"] + s["def_snaps"]
     p.years_pro += 1
 
 

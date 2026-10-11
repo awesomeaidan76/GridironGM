@@ -160,6 +160,8 @@ COACH_RATING_LABELS = {
 
 class Coach:
     youth_trust = None       # 0-1: how readily he plays young players (front_office.coach_youth_trust)
+    rotation_style = None    # substitutions.ROTATION_STYLES key (front_office.coach_rotation)
+    protect = None           # 0-1: how protective he is with hurt or worn players (front_office.coach_protect)
 
     def __init__(self, name=None, age=None):
         self.name = name or names.random_name()

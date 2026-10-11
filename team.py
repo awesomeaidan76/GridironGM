@@ -63,7 +63,8 @@ def _active(p):
 
 class Team:
     tag_year = None          # season the franchise tag was last used
-    rotation = None          # {"DL": "heavy", ...} how freely each group substitutes (None = normal)
+    rotation = None          # {"DL": "heavy", ...} how freely each group substitutes (None/"coach" = head coach's style)
+    injury_policy = None     # the user's call on hurt players: None (head coach decides), "ride" or "protect"
     def_gameplan = None      # the user's defensive game-plan choices (defense.GAMEPLAN_OPTIONS)
     ir_returns = (None, 0)   # (season, players activated from IR)
     gm = None                # CPU general manager (front_office.GM); None for the user's club
@@ -279,7 +280,7 @@ class Team:
         out = self.full_depth(pos)
         if include_injured:
             return out
-        return [p for p in out if not p.is_injured and not p.ir and not p.holdout]
+        return [p for p in out if not p.sidelined and not p.ir and not p.holdout]
 
     def starter_ids(self, exclude=None):
         """Players starting at any slot (optionally ignoring one slot)."""
@@ -354,7 +355,7 @@ class Team:
         if len(out) < n:
             used = {p.id for p in out}
             rest = sorted((p for p in self.roster
-                           if not p.is_injured and _active(p) and p.id not in used),
+                           if not p.sidelined and _active(p) and p.id not in used),
                           key=lambda p: -p.rating_at(pos))
             out += rest[:n - len(out)]
         return out

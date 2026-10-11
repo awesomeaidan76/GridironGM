@@ -284,12 +284,18 @@ def ai_cutdown(lg, team, limit=None):
             release(lg, team, victim, quiet=True)
 
 
-def ir_moves(lg, team, allow_cuts=True):
-    """Staff-run injured reserve: stash long injuries, bring healthy players back."""
+def ir_moves(lg, team, allow_cuts=True, gone=()):
+    """
+    Staff-run injured reserve: stash long injuries, bring healthy players back. gone: clubs out
+    of the playoff race (front_office.eliminated), which shut down their injured veterans.
+    """
+    import front_office as fo
     for p in list(team.roster):
         if p.injury and p.injury.get("weeks", 0) >= rr.IR_MIN_WEEKS + 1 and not p.ir and not p.ps:
             rr.place_ir(lg, team, p, quiet=True)
     for p in sorted(rr.injured_reserve(team), key=lambda x: -x.ca):
+        if not p.is_injured and fo.ir_shutdown(lg, team, p, gone):
+            continue
         ok, _ = rr.can_activate_ir(lg, team, p)
         if not ok and not p.is_injured and active_count(team) >= settings["roster_size"]:
             # Make room for a healthy starter-quality player
@@ -302,12 +308,14 @@ def ir_moves(lg, team, allow_cuts=True):
 
 def in_season_moves(lg):
     """AI teams manage IR and sign emergency depth when injuries pile up."""
+    import front_office as fo
     auto_user = settings["auto_roster_moves"]
+    gone = fo.eliminated(lg)
     for team in lg.teams.values():
         user = team.abbr == lg.user_abbr
         if user and not auto_user:
             continue
-        ir_moves(lg, team, allow_cuts=not user)
+        ir_moves(lg, team, allow_cuts=not user, gone=gone)
         if user:
             # Fill IR vacancies from the practice squad (never cuts, never signs)
             while active_count(team) < settings["roster_size"]:

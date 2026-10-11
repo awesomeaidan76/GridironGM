@@ -16,6 +16,7 @@ import inbox
 import packages
 import position_fit as fit
 import roster_rules as rr
+import substitutions as sub
 from coach import COACH_RATINGS, COACH_RATING_LABELS, OFFENSIVE_SCHEMES, DEFENSIVE_SCHEMES
 from contracts import market_value
 from ratings import (POSITIONS, POSITION_NAMES, key_attributes, attr_abbr, ROSTER_TEMPLATE)
@@ -724,16 +725,27 @@ class DepthChartScreen(Screen):
         rot = QHBoxLayout()
         rot.addWidget(QLabel("Rotation:"))
         self.rot_combo = QComboBox()
-        for key, label in (("none", "Starters play every snap"), ("light", "Light rotation"),
-                           ("normal", "Normal rotation"), ("heavy", "Heavy rotation (keep them fresh)")):
+        for key, label in (("coach", "Head coach's style"), ("none", "Starters play every snap"),
+                           ("light", "Light rotation"), ("normal", "Normal rotation"),
+                           ("heavy", "Heavy rotation (keep them fresh)")):
             self.rot_combo.addItem(label, key)
         self.rot_combo.currentIndexChanged.connect(lambda _i: self._rotation_changed())
         rot.addWidget(self.rot_combo)
+        rot.addWidget(QLabel("Injured players:"))
+        self.inj_combo = QComboBox()
+        for key, label in (("coach", "Head coach decides"), ("ride", "Play through it when they can"),
+                           ("protect", "Protect them (questionable players sit)")):
+            self.inj_combo.addItem(label, key)
+        self.inj_combo.setToolTip("Who plays through a questionable injury (one game left on the clock) or "
+                                  "goes back in after a knock, and how big a lead it takes to send in the "
+                                  "backups in the final minute.")
+        self.inj_combo.currentIndexChanged.connect(lambda _i: self._injury_policy_changed())
+        rot.addWidget(self.inj_combo)
+        mid.addLayout(rot)
         self.rot_note = QLabel("")
         self.rot_note.setObjectName("muted")
         self.rot_note.setWordWrap(True)
-        rot.addWidget(self.rot_note, 1)
-        mid.addLayout(rot)
+        mid.addWidget(self.rot_note)
         btns = QHBoxLayout()
         for label, fn, tip in (
                 ("▲ Up", lambda: self._move(-1), "Move up (Ctrl+Up). You can also drag players."),
@@ -859,7 +871,11 @@ class DepthChartScreen(Screen):
                 starter = healthy_rank <= n_start
             share = 100.0 * p.season_stats[unit] / team_snaps
             elsewhere = [s for s in two.get(p.id, []) if s != slot]
-            if p.injury:
+            if p.injury and p.injury.get("play"):
+                status, col = f"Playing through {p.injury['name'].lower()}", T("warn")
+            elif p.injury and p.injury.get("weeks") == 1 and not p.ir:
+                status, col = f"Questionable: {p.injury['name'].lower()} (1w)", T("bad")
+            elif p.injury:
                 status, col = f"{p.injury['name']} ({max(0, p.injury['weeks'])}w)", T("bad")
             elif p.holdout:
                 status, col = "Holding out", T("bad")
@@ -871,6 +887,10 @@ class DepthChartScreen(Screen):
                 status, col = f"Starter (also starts at {', '.join(elsewhere)})", T("warn")
             else:
                 status, col = ("Starter" if starter else ""), None
+            worn = sub.load_label(p.load) if not p.injury else ""
+            if worn:
+                status = f"{status} · {worn}" if status else worn
+                col = col or T("warn")
             own = p.position == base or slot in RETURN_SLOTS
             pos_tip = None if own else f"{p.ovr} at his own position ({p.position})"
             if p.converted_from:
@@ -948,15 +968,25 @@ class DepthChartScreen(Screen):
 
     def _show_rotation(self, slot):
         grp = self.ROT_GROUPS.get(packages.base_of(slot))
+        if grp == "OL":
+            grp = None                       # the line plays every snap
+        style = sub.coach_rotation(self.user.coach)
+        self.rot_combo.setItemText(0, f"Head coach's style ({style.lower()})")
         self.rot_combo.setEnabled(grp is not None)
         self.rot_combo.blockSignals(True)
-        cur = (self.user.rotation or {}).get(grp, "normal") if grp else "normal"
+        cur = (self.user.rotation or {}).get(grp) or "coach" if grp else "coach"
         self.rot_combo.setCurrentIndex(max(0, self.rot_combo.findData(cur)))
         self.rot_combo.blockSignals(False)
+        self.inj_combo.blockSignals(True)
+        self.inj_combo.setCurrentIndex(max(0, self.inj_combo.findData(self.user.injury_policy or "coach")))
+        self.inj_combo.blockSignals(False)
         self.rot_note.setText(
-            f"Applies to the whole {grp} group. Your order decides who plays: backups come in to rest "
-            "tired starters (tired players lose speed, strength and technique and get hurt more)."
-            if grp else "Quarterbacks, kickers and returners don't rotate (except in blowouts).")
+            f"Rotation applies to the whole {grp} group. Your order decides who plays: backups come in to "
+            "rest tired starters (tired players lose speed, strength and technique and get hurt more), "
+            "mostly on early downs, while the starters stay in on third down, in the red zone and late in "
+            "close games. Heavy workloads carry over to next week."
+            if grp else "Quarterbacks, kickers, returners and the offensive line don't rotate (the backups "
+                        "come in only for a blowout's final minute).")
 
     def _rotation_changed(self):
         grp = self.ROT_GROUPS.get(packages.base_of(self._slot()))
@@ -964,8 +994,16 @@ class DepthChartScreen(Screen):
             return
         team = self.user
         rot = dict(team.rotation or {})
-        rot[grp] = self.rot_combo.currentData()
+        key = self.rot_combo.currentData()
+        if key == "coach":
+            rot.pop(grp, None)
+        else:
+            rot[grp] = key
         team.rotation = rot
+
+    def _injury_policy_changed(self):
+        key = self.inj_combo.currentData()
+        self.user.injury_policy = None if key == "coach" else key
 
     def _keep_sorted_changed(self, on):
         self.user.depth_auto = bool(on)

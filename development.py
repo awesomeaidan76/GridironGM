@@ -180,6 +180,14 @@ FACTOR_LABELS = {
 }
 
 
+SEASON_SNAPS = 17 * 62          # a unit's snaps in a season (offense or defense)
+
+
+def snap_share(player, gs):
+    """His share of last season's playing time: starts, or snaps for a rotation player or a fill-in."""
+    return max(min(1.0, gs / 17.0), min(1.0, (player.last_season_snaps or 0) / SEASON_SNAPS))
+
+
 def yearly_change(player, team, gp=None, gs=None, last_season=None, detail=False):
     """
     Expected CA change this offseason (can be negative).
@@ -207,7 +215,7 @@ def yearly_change(player, team, gp=None, gs=None, last_season=None, detail=False
     m["coaching"] = 0.80 + coach_dev / 20.0 * 0.35
     m["facilities"] = 0.90 + facilities / 20.0 * 0.20
     # Playing time: snaps matter more than the depth chart
-    share = min(1.0, gs / 17.0) if gs else min(0.5, gp / 34.0)
+    share = max(snap_share(player, gs), min(0.5, gp / 34.0))
     if getattr(player, "was_ps", None) == last_season and gp < 4:
         m["playing_time"] = 0.97
     elif player.years_pro == 0 and gp == 0:
@@ -396,7 +404,7 @@ def _drift_potential(player, team, last_season, surprise):
     import staff as staff_mod
     dev = staff_mod.dev_rating(team, player.position) if team else 8
     gs = player.last_season_gs or 0
-    share = min(1.0, gs / 17.0)
+    share = snap_share(player, gs)
     weeks_missed = sum(w for (yr, _, w) in player.injury_history if yr == last_season)
     mu = (h.get("work_rate", 50) - 50) / 50.0 * 1.2 + (h.get("ambition", 50) - 50) / 50.0 * 0.5 \
         + (dev - 10) / 10.0 * 0.8 + surprise * 2.0
