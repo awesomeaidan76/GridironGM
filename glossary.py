@@ -402,6 +402,11 @@ PLAYBOOK_DESC = [
      "of it the receivers get the ball at their 40, into the end zone in the air is a touchback (to the 30, "
      "or the 35 if the committee later moves it to get more kicks returned). Onside kicks must be declared, "
      "so there are no surprise onsides."),
+    ("Kneel-downs", "Victory formation: the quarterback takes the snap and goes down to run out the clock. "
+     "Each kneel is a one-yard loss on his rushing line. A team kneels only when the kneels it has left "
+     "in the series can really run the clock out, counting the other side's timeouts and the two-minute "
+     "warning; it never kneels away a fourth down with time left. At the end of the first half a team deep "
+     "in its own end kneels unless an aggressive staff thinks there is time to reach field-goal range."),
     ("Free kicks", "After a safety the team that gave it up punts from its own 20, and it can be returned. "
      "After a fair catch, the receiving team may try a fair catch kick: a field goal kicked from the spot "
      "with no rush, used at the end of a half."),
