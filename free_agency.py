@@ -192,10 +192,12 @@ def ai_free_agency_wave(lg, max_signings=3):
         mode = fo.plan_of(team)
         spend = fo.spend_factor(team)
         limit = max(1, int(round(max_signings * min(1.4, 0.55 + spend * 0.45))))
-        needs = team.needs()
+        needs = fo.needs(team)
         ranked = sorted(needs.items(), key=lambda kv: -kv[1])
-        # Star-chasers look at the best names first, whatever the depth chart says
-        if g is not None and g.t("stars") >= 0.72 and wave <= 1 and spend >= 0.9:
+        # Star-chasers (and clubs out to land a star) look at the best names first, whatever the
+        # depth chart says
+        hunt = g is not None and (g.t("stars") >= 0.72 or "Land a star" in fo.focus_of(team))
+        if hunt and wave <= 1 and spend >= 0.9:
             top = sorted({p.position for p in lg.free_agents if p.ovr >= 82},
                          key=lambda pos: -needs.get(pos, 0))
             ranked = [(pos, max(needs.get(pos, 0), 0.12)) for pos in top[:2]] + \

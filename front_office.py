@@ -423,21 +423,34 @@ def param(team, key):
 
 # ── Situation assessment ──────────────────────────────────────────────────────
 
-def _qb_status(team):
+# Quarterback situations are judged against the league: a club whose starter is one of the
+# league's best has its answer even when the whole league's crop is thin.
+QB_FRANCHISE = 80         # a franchise quarterback anywhere...
+QB_TOP = (8, 76)          # ...or one of the league's eight best starters, rated this high
+QB_BRIDGE = (22, 70)      # a stopgap: one of the top twenty-two, or rated this high
+
+
+def _qb_status(team, lg=None):
     qbs = sorted(team.players_at("QB", include_inactive=True), key=lambda p: -p.ovr)
     if not qbs:
         return "searching", None
     q = qbs[0]
+    rank = 1 + sum(1 for t in lg.teams.values() if t is not team and _qb1_ovr(t) > q.ovr) if lg else 16
     young = [p for p in qbs if p.age <= 24 and p.pot >= 78]
-    if q.ovr >= 80 and q.age >= 35:
+    franchise = q.ovr >= QB_FRANCHISE or (rank <= QB_TOP[0] and q.ovr >= QB_TOP[1])
+    if franchise and q.age >= 35:
         return "ageing star", q
-    if q.ovr >= 80:
+    if franchise:
         return "franchise", q
     if young:
         return "developing", young[0]
-    if q.ovr >= 73:
+    if rank <= QB_BRIDGE[0] or q.ovr >= QB_BRIDGE[1]:
         return "bridge", q
     return "searching", q
+
+
+def _qb1_ovr(team):
+    return max((p.ovr for p in team.players_at("QB", include_inactive=True)), default=0)
 
 
 def assess(lg, team, midseason=False):
@@ -458,7 +471,7 @@ def assess(lg, team, midseason=False):
     core_age = sum(p.age for p in top) / len(top) if top else 27.0
     young = sum(1 for p in team.roster if p.age <= 25 and p.ovr >= 74)
     stars = sum(1 for p in top if p.ovr >= 85)
-    qb_status, qb = _qb_status(team)
+    qb_status, qb = _qb_status(team, lg)
     cap = lg.salary_cap
     committed = sum(p.salary for p in team.roster if p.contract and p.contract.get("years", 0) >= 1)
     if lg.phase in ("regular", "playoffs"):
@@ -514,37 +527,198 @@ def _utilities(lg, team, a):
     return u
 
 
-def _focus(a, mode):
-    out = []
-    qs = a["qb_status"]
-    if qs == "searching" or (qs == "bridge" and mode not in BUYERS):
-        out.append("Find a franchise QB")
-    elif qs == "ageing star":
-        out.append("Groom the QB's successor")
-    elif qs == "developing":
-        out.append("Develop the young QB")
-    if a["cap_load"] > 0.95 and mode != "Cap Reset":
-        out.append("Cap is tight")
-    if a["core_age"] >= 29.0 and mode in BUYERS:
-        out.append("Window is closing")
-    if a["young"] >= 7:
-        out.append("Lock up the young core")
-    if a.get("hot", 0.0) >= 0.5:
-        out.append("On the hot seat")
+# ── Priorities ────────────────────────────────────────────────────────────────
+# Every front office works on two or three things a year. Each club scores every candidate
+# from its own situation: how each position group ranks in the league and how old it is,
+# what its GM values (position_value: analytics, trenches, defense, his draft record), what
+# its head coach's system needs, its plan, its owner, its cap sheet and its quarterback. A
+# small personal lean (seeded by club, GM and year) breaks ties, so two clubs with the same
+# holes don't always chase the same fix. The best two always count; a third only if it
+# matters nearly as much.
+
+PRIORITY_GROUPS = {
+    "QB": ("QB",), "OL": ("OT", "IOL"), "RB": ("RB",), "WEAPONS": ("WR", "TE"),
+    "EDGE": ("EDGE",), "DT": ("DT",), "LB": ("LB",), "DB": ("CB", "S"), "ST": ("K", "P"),
+}
+# name: (position group or None, what it changes - read by needs(), the valuation below, the
+# draft board, re-signing and free agency)
+PRIORITIES = {
+    "Find a franchise QB": ("QB", "Pays up for quarterbacks in trades, free agency and on draft day."),
+    "Groom the QB's successor": ("QB", "Drafts and trades for a young quarterback to learn behind the starter."),
+    "Develop the young QB": ("QB", "Won't spend on a veteran quarterback who would block the kid."),
+    "Rebuild the offensive line": ("OL", "Tackles and interior linemen move up its draft board, free-agent "
+                                         "list and trade targets."),
+    "Find a lead back": ("RB", "Running backs move up its draft board, free-agent list and trade targets."),
+    "Add weapons for the passing game": ("WEAPONS", "Receivers and tight ends move up its draft board, "
+                                                    "free-agent list and trade targets."),
+    "Find a pass rusher": ("EDGE", "Edge rushers move up its draft board, free-agent list and trade targets."),
+    "Strengthen the defensive interior": ("DT", "Defensive tackles move up its draft board, free-agent list "
+                                                "and trade targets."),
+    "Find linebackers": ("LB", "Linebackers move up its draft board, free-agent list and trade targets."),
+    "Fix the secondary": ("DB", "Cornerbacks and safeties move up its draft board, free-agent list and "
+                                "trade targets."),
+    "Upgrade the kicking game": ("ST", "Looks for a better kicker or punter."),
+    "Land a star": (None, "Chases the biggest names in trades and free agency."),
+    "Stockpile draft picks": (None, "Values its draft picks more and is happy to trade down."),
+    "Get younger": (None, "Pays more for players 25 and under, less for veterans past 29."),
+    "Cap is tight": (None, "Keeps money back in re-signing and free agency."),
+    "Window is closing": (None, "Pays more for proven veterans and less for future picks."),
+    "Lock up the young core": (None, "Extends young core players a year early, before their price rises."),
+    "On the hot seat": (None, "Trades future picks for help now and won't start a rebuild."),
+}
+FOCUS_EFFECTS = {k: v[1] for k, v in PRIORITIES.items()}
+GROUP_PRIORITY = {v[0]: k for k, v in PRIORITIES.items() if v[0] and v[0] != "QB"}
+# How much a club cares about a group when its rank alone says nothing
+GROUP_BASE = {"QB": 0.35, "OL": 0.15, "EDGE": 0.15, "WEAPONS": 0.10, "DB": 0.10, "DT": 0.0,
+              "LB": -0.10, "RB": -0.10, "ST": -0.55}
+PRIORITY_WEAKNESS = 0.75      # score per standard deviation a group sits below the league's average
+PRIORITY_AGE = 0.20           # per year the group's starters sit past the end of their prime (from -1)
+PRIORITY_LEAN = 0.25          # spread of a club's personal lean on each candidate
+PRIORITY_BAR = 0.80           # a third priority needs at least this score
+PRIORITY_MAX = 3
+PRIORITY_NEED = (1.35, 0.06)  # needs() at a priority group's positions: x this, plus this
+
+
+def group_strengths(lg):
+    """
+    {abbr: {group: (average rating of its starters, their average years past their prime)}},
+    plus the league's mean and spread of each group. Cached until rosters change.
+    """
+    token = (lg.year, lg.phase, lg.week, getattr(lg, "draft_index", 0), len(lg.transactions),
+             len(lg.free_agents))
+    cache = getattr(lg, "_group_cache", None)
+    if cache is not None and cache[0] == token:
+        return cache[1]
+    from ratings import AGE_CURVES
+    clubs = {}
+    for t in lg.teams.values():
+        s = t.starters()
+        row = {}
+        for grp, positions in PRIORITY_GROUPS.items():
+            ps = [(p, pos) for pos in positions for p in s.get(pos, [])]
+            if not ps:
+                row[grp] = (50.0, 0.0)
+                continue
+            rating = sum(p.rating_at(pos) for p, pos in ps) / len(ps)
+            past = sum(p.age - AGE_CURVES[pos][1] for p, pos in ps) / len(ps)
+            row[grp] = (rating, past)
+        clubs[t.abbr] = row
+    league = {}
+    for grp in PRIORITY_GROUPS:
+        vals = [r[grp][0] for r in clubs.values()]
+        mu = sum(vals) / len(vals)
+        sd = (sum((v - mu) ** 2 for v in vals) / len(vals)) ** 0.5
+        league[grp] = (mu, max(1.0, sd))
+    out = (clubs, league)
+    lg._group_cache = (token, out)
     return out
 
 
-# What each objective changes (read by the valuation below, the draft board, re-signing and
-# free agency): plain numbers so the Front Offices screen and the port can show and copy them.
-FOCUS_EFFECTS = {
-    "Find a franchise QB": "Pays up for quarterbacks in trades and on draft day.",
-    "Groom the QB's successor": "Drafts and trades for a young quarterback to learn behind the starter.",
-    "Develop the young QB": "Won't spend on a veteran quarterback who would block the kid.",
-    "Cap is tight": "Keeps money back in re-signing and free agency.",
-    "Window is closing": "Pays more for proven veterans and less for future picks.",
-    "Lock up the young core": "Extends young core players a year early, before their price rises.",
-    "On the hot seat": "Trades future picks for help now and won't start a rebuild.",
-}
+def _scheme_lean(c):
+    """What the head coach's system asks of each group (added to its score)."""
+    t = c.tendencies
+    pl = t.get("pass_lean", 0.0)
+    out = {"WEAPONS": 0.30 * pl, "RB": -0.25 * pl, "OL": 0.15 * max(0.0, -pl),
+           "DB": 0.25 * (t.get("blitz", 0.35) - 0.35)}
+    if t.get("front") == "3-4":
+        out["EDGE"] = 0.15
+        out["LB"] = 0.10
+    elif t.get("front") == "4-3":
+        out["DT"] = 0.12
+        out["EDGE"] = 0.05
+    return out
+
+
+def priority_scores(lg, team, a, mode):
+    """Every candidate priority for this club and its score (higher matters more)."""
+    from ratings import POSITION_VALUE
+    g = gm_of(team)
+    gt = g.t if g else (lambda k: 0.5)
+    clubs, league = group_strengths(lg)
+    mine = clubs.get(team.abbr, {})
+    lean = _scheme_lean(team.coach)
+    seller = mode in SELLERS
+    scores = {}
+    for grp, positions in PRIORITY_GROUPS.items():
+        rating, past = mine.get(grp, (50.0, 0.0))
+        mu, sd = league[grp]
+        v = -PRIORITY_WEAKNESS * (rating - mu) / sd + GROUP_BASE[grp] + lean.get(grp, 0.0)
+        taste = sum(position_value(lg, team, pos) / POSITION_VALUE[pos] for pos in positions) / len(positions)
+        v += (taste - 1.0) * 1.2
+        if not seller:
+            v += PRIORITY_AGE * _clamp(past + 1.0, 0.0, 3.0)    # an ageing group needs replacing soon
+        elif grp != "QB":
+            v *= 0.8 if mode != "Tank" else 0.6                  # a rebuild buys the future, not fixes
+        if grp == "QB":
+            qs = a["qb_status"]
+            if qs == "searching":
+                scores["Find a franchise QB"] = v + 0.5
+            elif qs == "bridge":
+                scores["Find a franchise QB"] = v - (0.7 if mode in BUYERS else 0.4)
+            elif qs == "ageing star":
+                scores["Groom the QB's successor"] = 1.3
+            elif qs == "developing":
+                scores["Develop the young QB"] = 1.1 + (0.2 if seller else 0.0)
+        else:
+            scores[GROUP_PRIORITY[grp]] = v
+    o = owner_traits(team.owner) if getattr(team, "owner", None) else None
+    ot = owner_type(o) if o else ""
+    if a["cap_load"] > 0.95 and mode != "Cap Reset":
+        scores["Cap is tight"] = 0.9 + (a["cap_load"] - 0.95) * 8.0 + (0.2 if ot == "Penny-Pincher" else 0.0)
+    if a["core_age"] >= 28.6 and mode in BUYERS:
+        scores["Window is closing"] = 0.7 + (a["core_age"] - 28.6) * 0.8
+    if a["young"] >= 6:
+        scores["Lock up the young core"] = 0.4 + 0.12 * (a["young"] - 6) + (gt("patience") - 0.5) * 0.4 \
+            + (gt("loyalty") - 0.5) * 0.4
+    if a.get("hot", 0.0) >= 0.5:
+        scores["On the hot seat"] = 0.8 + a["hot"] * 0.6
+    if mode in ("Rebuild", "Tank", "Youth Movement"):
+        scores["Stockpile draft picks"] = (0.9 if mode != "Youth Movement" else 0.5) \
+            + (gt("patience") - 0.5) + (gt("analytics") - 0.5) * 0.4
+    if seller and a["core_age"] >= 27.8:
+        scores["Get younger"] = 0.6 + (a["core_age"] - 27.8) * 0.8 + (gt("youth") - 0.5) * 0.8
+    if mode in BUYERS and a["stars"] <= 2 and gt("stars") >= 0.6:
+        scores["Land a star"] = 0.5 + (gt("stars") - 0.6) * 2.0 + (0.3 if ot in ("Showman", "Meddler") else 0.0)
+    r = random.Random(zlib.crc32(f"prio:{team.abbr}:{lg.year}:{g.name if g else ''}".encode()))
+    for k in sorted(scores):
+        scores[k] += r.gauss(0, PRIORITY_LEAN)
+    return scores
+
+
+def priorities(lg, team, a, mode):
+    """The club's priorities this year, most important first."""
+    scores = priority_scores(lg, team, a, mode)
+    ranked = sorted(scores, key=lambda k: -scores[k])
+    out = ranked[:2]
+    for k in ranked[2:PRIORITY_MAX]:
+        if scores[k] >= PRIORITY_BAR:
+            out.append(k)
+    return out
+
+
+def priority_positions(team):
+    """Positions the club's priorities point at."""
+    out = set()
+    for f in focus_of(team):
+        grp = PRIORITIES.get(f, (None,))[0]
+        if grp:
+            out.update(PRIORITY_GROUPS[grp])
+    return out
+
+
+def needs(team):
+    """
+    How badly a CPU club wants help at each position (Team.needs, raised where its priorities
+    point). The user's club gets the plain roster read.
+    """
+    out = team.needs()
+    if gm_of(team) is None:
+        return out
+    k, add = PRIORITY_NEED
+    for pos in priority_positions(team):
+        if pos in out:
+            out[pos] = out[pos] * k + add
+    return out
 
 
 def focus_of(team):
@@ -591,12 +765,12 @@ def choose_plan(lg, team, initial=False, midseason=False):
     mode = max(u, key=u.get)
     if cur and cur["mode"] == mode and not initial:
         plan = dict(cur)
-        plan["focus"] = _focus(a, mode)
+        plan["focus"] = priorities(lg, team, a, mode)
         plan["reason"] = _reason(lg, team, a, mode)
         plan["rank"] = a["rank"]
         return plan
     return {"mode": mode, "since": lg.year, "commit_until": lg.year + PLANS[mode]["commit"] - 1,
-            "focus": _focus(a, mode), "reason": _reason(lg, team, a, mode), "rank": a["rank"],
+            "focus": priorities(lg, team, a, mode), "reason": _reason(lg, team, a, mode), "rank": a["rank"],
             "history": list((cur or {}).get("history", []))[-12:]}
 
 
@@ -816,6 +990,12 @@ def player_mult(lg, team, p):
         m *= 0.80
     if ("Window is closing" in focus or "On the hot seat" in focus) and p.age >= 27 and p.ovr >= 78:
         m *= 1.08
+    if "Get younger" in focus:
+        m *= 1.08 if p.age <= 25 else 0.90 if p.age >= 29 else 1.0
+    if "Land a star" in focus and p.ovr >= 85 and p.team != team.abbr:
+        m *= 1.12
+    if p.team != team.abbr and p.ovr >= 70 and p.position != "QB" and p.position in priority_positions(team):
+        m *= 1.06                          # on top of the raised need (trades.trade_value)
     if p.is_injured:
         m *= 1.0 + (g.t("risk") - 0.5) * 0.4
     if team.power == "Coach-led":
@@ -838,6 +1018,8 @@ def pick_mult(lg, team, year):
         m *= 0.90
     if "On the hot seat" in focus:
         m *= 0.85
+    if "Stockpile draft picks" in focus:
+        m *= 1.12
     # A GM values his own far-off picks more: nobody knows where he'll be in two years
     if year >= lg.year + 2:
         m *= 1.0 + (g.t("patience") - 0.5) * 0.15
@@ -1093,6 +1275,8 @@ def board_value(lg, team, p, needs, est_ca, est_pa):
         v += 4
     elif p.position == "QB" and "Develop the young QB" in focus:
         v -= 6
+    elif p.position != "QB" and p.position in priority_positions(team):
+        v += 3                             # even a best-player-available GM leans toward his priority
     if p.position in ("K", "P"):
         v -= 22
     if p.position == "FB":

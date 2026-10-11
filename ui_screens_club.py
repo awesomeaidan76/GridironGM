@@ -148,8 +148,7 @@ class HomeScreen(Screen):
                                  f"Allowed {rec.pa / g:.1f}" if rec.games else "Season not started"))
         ranks = sorted(lg.teams.values(), key=lambda x: -x.overall)
         ovr_rank = ranks.index(team) + 1
-        from ratings import unit_ovr
-        tov = unit_ovr(team.unit_ratings()["OVR"], "OVR")
+        tov = lg.team_rating(team)
         t = StatTile("Team Overall", tov, f"#{ovr_rank} of 32")
         t.set(tov, color=ovr_color(tov))
         tiles.addWidget(t)
@@ -252,20 +251,18 @@ class HomeScreen(Screen):
         mid = QVBoxLayout()
         mid.addWidget(h_label(f"Week {wk}: {'vs' if h == team.abbr else '@'} {opp.full_name}", "h3"))
         orec = lg.standings[opp.abbr]
-        sub = QLabel(f"{opp.abbr} {orec.wlt()} · OVR {opp.overall} · {opp.coach.off_scheme} / "
+        sub = QLabel(f"{opp.abbr} {orec.wlt()} · OVR {lg.team_rating(opp)} · {opp.coach.off_scheme} / "
                      f"{opp.coach.def_scheme}")
         sub.setObjectName("sub")
         mid.addWidget(sub)
         row.addLayout(mid, 1)
         row.addWidget(TeamBadge(opp, 44))
         card.body.addLayout(row)
-        mine, theirs = team.unit_ratings(), opp.unit_ratings()
         for label, a_key, b_key in (("Your offense vs their defense", "OFF", "DEF"),
-                                    ("Your defense vs their offense", "DEF", "OFF"),
-                                    ("Your QB vs their QB", "QB", "QB")):
-            diff = mine[a_key] - theirs[b_key]
-            col = T("good") if diff > 4 else T("bad") if diff < -4 else T("text2")
-            l = QLabel(f"{label}: <b style='color:{col}'>{int(mine[a_key])} vs {int(theirs[b_key])}</b>")
+                                    ("Your defense vs their offense", "DEF", "OFF")):
+            a, b = lg.team_rating(team, a_key), lg.team_rating(opp, b_key)
+            col = T("good") if a - b >= 4 else T("bad") if b - a >= 4 else T("text2")
+            l = QLabel(f"{label}: <b style='color:{col}'>{a} vs {b}</b>")
             l.setTextFormat(Qt.TextFormat.RichText)
             card.add(l)
         return card

@@ -49,10 +49,10 @@ def pot_cell(p, scouting=10):
     return cell(pot_text(p, scouting), sort=hi, color=ovr_color((lo + hi) // 2))
 
 
-def team_cell(value, unit):
-    """Team unit strength shown on the 1-99 team scale."""
+def team_cell(value, unit, scale=None):
+    """Team unit strength shown on the 1-99 team scale (scale: League.unit_scale())."""
     from ratings import unit_ovr
-    return ovr_cell(unit_ovr(value, unit))
+    return ovr_cell(unit_ovr(value, unit, scale))
 
 
 def attr_cell(v):

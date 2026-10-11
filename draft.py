@@ -174,10 +174,11 @@ def make_pick(lg, abbr, player):
 
 def ai_pick(lg):
     import market
+    import front_office as fo
     market.draft_day_trade(lg)
     rnd, pick, abbr = lg.draft_order[lg.draft_index]
     team = lg.teams[abbr]
-    needs = team.needs()
+    needs = fo.needs(team)
     pool = lg.draft_class[:90] if len(lg.draft_class) > 90 else lg.draft_class
     best = max(pool, key=lambda p: board_value(lg, team, p, needs))
     return make_pick(lg, abbr, best)

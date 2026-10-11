@@ -201,9 +201,28 @@ class League:
             cache = self._strength_cache
         return list(cache[1])
 
+    def unit_scale(self):
+        """The league's mean and spread of every team unit (ratings.unit_ovr), cached like strength_order."""
+        token = (self.year, self.phase, self.week, getattr(self, "draft_index", 0), len(self.transactions),
+                 len(self.free_agents))
+        cache = getattr(self, "_unit_scale_cache", None)
+        if cache is None or cache[0] != token:
+            from ratings import unit_scale
+            self._unit_scale_cache = (token, unit_scale([t.unit_ratings() for t in self.teams.values()]))
+            cache = self._unit_scale_cache
+        return cache[1]
+
+    def team_rating(self, team, unit="OVR"):
+        """A club's 1-99 rating in one unit (OVR, OFF, DEF, ST, QB, ...): 74 is the league's average club."""
+        from ratings import unit_ovr
+        t = self.teams[team] if isinstance(team, str) else team
+        return unit_ovr(t.unit_ratings()[unit], unit, self.unit_scale())
+
     def __getstate__(self):
         state = dict(self.__dict__)
         state.pop("_strength_cache", None)
+        state.pop("_unit_scale_cache", None)
+        state.pop("_group_cache", None)
         return state
 
     def __setstate__(self, state):

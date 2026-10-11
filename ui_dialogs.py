@@ -15,7 +15,7 @@ import save_manager
 from contracts import market_value, asking_salary, contract_length, POSITION_MAX_SHARE
 from player import ARCHETYPES
 from ratings import (ATTRIBUTES, ATTRIBUTE_GROUPS, POSITION_DISPLAY_GROUPS, POSITIONS,
-                     HIDDEN_TRAITS, POSITION_NAMES, stars_text, ca_tier, unit_ovr)
+                     HIDDEN_TRAITS, POSITION_NAMES, stars_text, ca_tier)
 from glossary import SETTING_DESC, league_readings, setting_reading
 from settings import settings, SPEC, GROUPS as SETTING_GROUPS
 from coach import COACH_RATINGS, COACH_RATING_LABELS
@@ -965,10 +965,8 @@ class TeamDialog(BaseDialog):
         sub.setObjectName("sub")
         col.addWidget(sub)
         hl.addLayout(col, 1)
-        u = team.unit_ratings()
         for k in ("OFF", "DEF", "OVR"):
-            from ratings import unit_ovr
-            v = unit_ovr(u[k], k)
+            v = lg.team_rating(team, k)
             t = StatTile({"OFF": "Offense", "DEF": "Defense", "OVR": "Overall"}[k], v)
             t.set(v, color=ovr_color(v))
             hl.addWidget(t)
@@ -996,7 +994,7 @@ class TeamDialog(BaseDialog):
         for k, label in (("QB", "Quarterback"), ("RB", "Running Back"), ("WR", "Receivers"),
                          ("TE", "Tight End"), ("OL", "Offensive Line"), ("DL", "Defensive Line"),
                          ("LB", "Linebackers"), ("DB", "Secondary"), ("ST", "Special Teams")):
-            ul.addWidget(AttrBar(label, int(u[k]), maximum=200))
+            ul.addWidget(AttrBar(label, lg.team_rating(team, k), maximum=99))
         ul.addStretch(1)
         tabs.addTab(units, "Unit Ratings")
         # Coach
@@ -1234,7 +1232,7 @@ class NewGameDialog(QDialog):
 
         body = QHBoxLayout()
         body.setSpacing(12)
-        self.table = DataTable(["Team", "Conf", "Div", "OVR", "OFF", "DEF", "QB", "Coach Scheme",
+        self.table = DataTable(["Team", "Conf", "Div", "OVR", "OFF", "DEF", "Coach Scheme",
                                 "Cap Space"], stretch=0)
         self.table.itemSelectionChanged.connect(self._selected)
         self.table.on_activate = lambda abbr: self._choose(abbr)
@@ -1267,11 +1265,11 @@ class NewGameDialog(QDialog):
         self.league = new_league(self.name_edit.text().strip() or "Gridiron Football League")
         lg = self.league
         rows, keys = [], []
+        sc = lg.unit_scale()
         for t in lg.team_list():
             u = t.unit_ratings()
-            qb = t.lineup("QB", 1)[0]
-            rows.append([t.full_name, t.conference, t.division, team_cell(u["OVR"], "OVR"),
-                         team_cell(u["OFF"], "OFF"), team_cell(u["DEF"], "DEF"), ovr_cell(qb.ovr),
+            rows.append([t.full_name, t.conference, t.division, team_cell(u["OVR"], "OVR", sc),
+                         team_cell(u["OFF"], "OFF", sc), team_cell(u["DEF"], "DEF", sc),
                          t.coach.off_scheme, cell(money(t.cap_space(lg.salary_cap)),
                                                   t.cap_space(lg.salary_cap))])
             keys.append(t.abbr)
@@ -1289,7 +1287,6 @@ class NewGameDialog(QDialog):
         t = lg.teams[abbr]
         self.selected = abbr
         self.start_btn.setEnabled(True)
-        u = t.unit_ratings()
         ranks = sorted(lg.teams.values(), key=lambda x: -x.unit_ratings()["OVR"])
         rank = ranks.index(t) + 1
         if rank <= 6:
@@ -1306,8 +1303,8 @@ class NewGameDialog(QDialog):
         self.preview.title_label.setText(t.full_name)
         self.preview_text.setText(
             f"<b>League rank:</b> #{rank} of 32<br><b>Outlook:</b> {outlook}<br><br>"
-            f"<b>Offense</b> {unit_ovr(u['OFF'], 'OFF')} · <b>Defense</b> {unit_ovr(u['DEF'], 'DEF')} · "
-            f"<b>Special teams</b> {unit_ovr(u['ST'], 'ST')}<br><br>"
+            f"<b>Offense</b> {lg.team_rating(t, 'OFF')} · <b>Defense</b> {lg.team_rating(t, 'DEF')} · "
+            f"<b>Special teams</b> {lg.team_rating(t, 'ST')}<br><br>"
             f"<b>Head coach:</b> {c.name}<br>{c.off_scheme} offense · {c.def_scheme} defense<br><br>"
             f"<b>Best players</b><br>{star_txt}<br><br>"
             f"<b>Cap space:</b> {money(t.cap_space(lg.salary_cap))}")
@@ -1440,11 +1437,10 @@ class JobOffersDialog(QDialog):
         lay.addWidget(QLabel("These clubs want to interview you:"))
         self.table = DataTable(["Team", "Record", "Overall", "Owner patience"], stretch=0)
         rows, keys = [], []
-        from ratings import unit_ovr
         for abbr in lg.gm.get("offers", []):
             t = lg.teams[abbr]
             rec = lg.standings.get(abbr)
-            ov = unit_ovr(t.unit_ratings()["OVR"], "OVR")
+            ov = lg.team_rating(t)
             rows.append([t.full_name, rec.wlt() if rec else "", ovr_cell(ov),
                          getattr(getattr(t, "owner", None), "patience", 10)])
             keys.append(abbr)

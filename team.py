@@ -8,6 +8,7 @@ from ratings import (POSITIONS, ROSTER_TEMPLATE, ROSTER_MINIMUM, POSITION_VALUE,
 from coach import Coach, motion_tendency
 from position_fit import STARTERS, RETURN_SLOTS
 import packages
+import substitutions as sub
 from packages import PACKAGE_SLOTS
 
 # Auto sort's preference for a player's own position (CA points): someone out of
@@ -193,6 +194,8 @@ class Team:
             if boost and p.age <= 24:
                 # the reps go to the kids with real upside, not to any young player
                 v += boost * min(1.5, max(0.25, (p.pa - p.ca) / 15.0))
+            # a name player gets the nod in a close call
+            v += sub.REP_DEPTH * sub.rep_edge(p.reputation)
         return v
 
     def _listed(self, slot):
@@ -374,8 +377,10 @@ class Team:
             cands = [p for p in self.roster if not p.is_injured and _active(p)]
         # Teams avoid using their stars as returners
         def score(p):
-            star_penalty = 12 if p.ca >= 160 else 0
-            return p.return_rating - star_penalty
+            if p.ca >= 160:
+                return p.return_rating - 12
+            # a CPU staff gives a known return man the job in a close call
+            return p.return_rating + (sub.REP_RETURN * sub.rep_edge(p.reputation) if self.tactics is None else 0.0)
         cands.sort(key=score, reverse=True)
         if kind == "PR" and len(cands) > 1:
             return cands[1] if cands[1].return_rating >= cands[0].return_rating - 3 \
