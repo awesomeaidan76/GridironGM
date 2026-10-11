@@ -1564,17 +1564,48 @@ class GameSim:
 
     # ── Situational decisions ────────────────────────────────────────────────
 
+    KNEEL_PLAY = 2          # seconds a kneel takes from snap to whistle
+    KNEEL_RUNOFF = 39       # seconds the offense can let run before the next snap
+
     def _kneel_ok(self):
+        """Victory formation only when the kneels can actually run the clock out: count the snaps
+        left in this series, the defense's timeouts and the two-minute warning, and never kneel
+        away a fourth down that leaves time on the clock."""
         if self.quarter not in (2, 4, 5):
             return False
         diff = self.poss.score - self.dfn.score
         if self.quarter == 2:
-            return self.clock <= 32 and self.yl < 45 and diff >= -3 and self.down >= 1
-        if diff <= 0:
+            if self.clock > 40 or self.yl >= 45 or diff < -3:
+                return False
+            # still a shot at points? an aggressive staff tries a quick drive to field-goal range
+            need = (100 - self.yl) - 35
+            reach = (self.clock * 0.9 + 12 * self.poss.timeouts) * (0.7 + 0.6 * self.poss.plan["aggression"])
+            if need <= reach:
+                return False
+        elif diff <= 0:
             return False
-        downs_left = 4 - self.down + 1
-        burn = 40 * downs_left - 40 * min(self.dfn.timeouts, downs_left - 1)
-        return self.clock <= burn + 2
+        return self._kneels_burn_clock()
+
+    def _kneels_burn_clock(self):
+        t = self.clock
+        tos = self.dfn.timeouts if self.dfn.score < self.poss.score else 0   # only a trailing defense stops it
+        warn = self.quarter in (2, 4) and not self.tmw[self.quarter]
+        for snap in range(4 - self.down + 1):
+            t -= self.KNEEL_PLAY
+            if t <= 0:
+                return True
+            if snap == 4 - self.down:            # fourth down: the ball goes over with time left
+                return False
+            if tos > 0:
+                tos -= 1
+                continue
+            before = t
+            t -= self.KNEEL_RUNOFF
+            if warn and before > 120 >= t:
+                t, warn = 120, False             # the two-minute warning stops it
+            if t <= 0:
+                return True
+        return False
 
     def _fourth_down(self):
         """Return 'go', 'punt' or 'fg'."""
@@ -1962,13 +1993,20 @@ class GameSim:
         self.yl = max(1, self.yl - 1)
         self.down += 1
         self.togo += 1
+        start = self.clock
         stop = self.dfn.timeouts > 0 and self.dfn.score < self.poss.score
         if stop:
             self.dfn.timeouts -= 1
-            self.run_clock(2, False)
+            self.log(f"Timeout {self.dfn.abbr}", "note")
+            used = self.KNEEL_PLAY
         else:
-            self.clock -= 41
-            self.ts(self.poss, "top", 41)
+            used = self.KNEEL_PLAY + (self.KNEEL_RUNOFF if self.down <= 4 else 0)
+        self.clock -= used
+        if self.quarter in (2, 4) and not self.tmw[self.quarter] and start > 120 >= self.clock:
+            self.tmw[self.quarter] = True
+            self.clock = max(self.clock, min(120, start - self.KNEEL_PLAY))
+            self.log("Two-minute warning", "note")
+        self.ts(self.poss, "top", min(used, start))
         if self.down > 4 and self.clock > 0:
             self.turnover_on_spot("Downs")
 
