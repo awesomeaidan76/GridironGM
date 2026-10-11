@@ -100,9 +100,16 @@ class PlayerDialog(BaseDialog):
         if p.years_to_peak() > 0 and p.dev_profile() != "Normal":
             chips.addWidget(Chip("Raw — hard to project" if p.dev_profile() == "Raw"
                                  else "Polished — easier to project"))
-        if p.injury:
-            chips.addWidget(Chip(f"Injured: {p.injury['name']} ({max(0, p.injury['weeks'])} wk)",
+        if p.injury and p.injury.get("play"):
+            chips.addWidget(Chip(f"Playing through {p.injury['name'].lower()}", T("warn")))
+        elif p.injury:
+            q = " — questionable" if p.injury.get("weeks") == 1 and not p.ir else ""
+            chips.addWidget(Chip(f"Injured: {p.injury['name']} ({max(0, p.injury['weeks'])} wk){q}",
                                  T("bad")))
+        import substitutions as sub
+        worn = sub.load_label(p.load)
+        if worn and not p.injury:
+            chips.addWidget(Chip(worn, T("warn")))
         if p.hall_of_fame:
             chips.addWidget(Chip("Hall of Fame", T("gold")))
         for yr, aw in p.awards[-3:]:

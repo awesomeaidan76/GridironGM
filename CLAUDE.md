@@ -20,6 +20,8 @@ stay UI-free (see `docs/ARCHITECTURE.md`).
   `python tools/fo_probe.py [seed] [--iq 0.5] [--season]`.
 - Development and potential over a few seasons (talent counts, POT-OVR by age, yearly change, how often
   young players reach their ceiling): `python tools/dev_probe.py [seasons] [seed]` (~25 s a season).
+- Substitutions over one season (snap shares by depth place and coach rotation style, backup QB snaps,
+  injuries and knocks, questionable players who played, workloads): `python tools/subs_probe.py [seed]` (~20 s).
 - Offensive system identity (pass rate, depth, personnel, shotgun, QB runs, motion per system): `python tools/schemes.py`.
 - Check several calibrate seeds before trusting a change: league talent landscapes vary a lot.
 

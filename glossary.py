@@ -144,8 +144,10 @@ RATING_DESC = [
     ("Tiers", "Elite 90+, Pro Bowl 82-89, Starter 72-81, Rotation 64-71, Backup 55-63, Fringe below 55."),
     ("Attributes (1-100)", "90+ world class, 75-89 quality, 60-74 solid starter level, 45-59 backup, below 45 poor."),
     ("Development", "Each offseason a player grows, holds or declines depending on age, potential, work ethic, "
-                    "coaching, playing time, production, injuries, scheme fit, mentors and some luck. Your "
-                    "staff's report on his profile explains it — better coaches read it more accurately."),
+                    "coaching, playing time, production, injuries, scheme fit, mentors and some luck. Playing "
+                    "time counts his starts or his share of the snaps, whichever is more, so a rotation player "
+                    "or a rookie who plays a lot without starting still gets the credit. Your staff's report "
+                    "on his profile explains it — better coaches read it more accurately."),
     ("Raw / Polished", "How predictable a young player's development is. Raw players (about one in six) keep a "
                        "wide potential range until they are close to their peak: their ceiling moves more from "
                        "year to year and they break out or bust more often. Polished players are easier to "
@@ -193,8 +195,35 @@ GAMEDAY_DESC = [
     ("Rotation", "Your depth chart decides who plays. On every snap the staff checks how tired each starter "
      "is, and a fresher backup comes in to rest him when that is the better option at that moment. A starter "
      "is never benched just because someone listed behind him rates higher. Defensive linemen rotate the most, "
-     "offensive linemen and quarterbacks almost never. Set each group's rotation on the Depth Chart. In a "
-     "blowout late in the game the backups take over."),
+     "offensive linemen and quarterbacks never. Coaches rest players mostly on early downs and keep their best "
+     "men on the field on third down, in the red zone, at the end of a half and late in close games (sharper "
+     "game managers more so). Each head coach has a rotation style (see Rotation style); on the Depth Chart you "
+     "can follow it or set each group yourself. In a blowout the backups come in only in the final minute."),
+    ("Rotation style", "How freely a head coach substitutes, by group. Rides his starters: his best players stay "
+     "on the field and tire. Balanced: the league norm. Rotates the defensive line: a deep line rotation to "
+     "keep the pass rush fresh. Rotates the backs and receivers: more snaps for the second back and the "
+     "fourth receiver. Rotates heavily: fresh legs everywhere. Riding the starters wins more snaps from the "
+     "best players but builds workload and fatigue, which make injuries more likely. Shown in the coach's "
+     "style on the team screens."),
+    ("Workload", "Wear that carries over from game to game. A player who plays a heavier game than a "
+     "full-time starter at his position normally does (fatigue is measured at the final whistle) carries "
+     "some of it into next week and starts short of full energy, so he tires sooner. About two thirds of "
+     "it is still there a week later; a bye or a week off takes most of it away, the offseason all of it. "
+     "Shown as Heavy workload or Worn down on the Depth Chart and the player's profile."),
+    ("Questionable", "A player with one game left on his injury clock. Before each game his staff decides "
+     "whether he plays through it: more often for a starter who is clearly better than the man behind him "
+     "and in the playoffs, less often for a protective coach, a muscle strain that can come back worse or "
+     "a club out of the race. Concussions always sit. Playing hurt he gives up a little of everything and "
+     "is more likely to get hurt again. Your club follows the Injured players choice on the Depth Chart "
+     "(head coach decides, play through it, or protect them)."),
+    ("Knock", "A minor in-game injury that costs no games (bruised ribs, a quad contusion, back spasms). The "
+     "trainers look at him for a few series and the staff decides whether he goes back in: usually in a "
+     "close game or the playoffs, rarely in a blowout, a lost season or under a protective coach."),
+    ("Protective coach", "How careful a head coach is with banged-up players: protective coaches sit "
+     "questionable players, keep a player with a knock out and send in the backups sooner in a blowout's "
+     "final minute; others play through pain. Shown in the coach's style."),
+    ("Shut down", "A club out of the playoff race keeps a healthy veteran (28 or older) on injured reserve "
+     "for the rest of the season instead of risking him. It also gives its young players more snaps."),
     ("Two slots", "A player can be listed at two slots (a receiver who also plays corner, a starter who returns "
      "kicks). He plays one spot per snap: when both of his slots are on the field together he plays the first "
      "(quarterback, line, running back, tight end, receiver; on defense line, linebacker, corner, safety) and "
@@ -469,9 +498,12 @@ def front_office_desc():
         out.append((f"Power structure: {k}", v))
     out.append(("Coach styles", "A head coach's style comes from his strongest quality (Offensive or Defensive "
                 "Mastermind, Teacher and Developer, Players' Coach, Game-Day Tactician, Adaptable Problem-Solver, "
-                "Disciplinarian), plus his 4th-down temperament and whether he plays young players or trusts "
-                "veterans. Coaches who trust youth give young players the edge on close depth-chart calls; "
-                "rebuilding clubs play the kids even more."))
+                "Disciplinarian), plus his 4th-down temperament, whether he plays young players or trusts "
+                "veterans, his rotation style (rides his starters, rotates his defensive line, rotates his backs "
+                "and receivers, rotates heavily) and whether he protects banged-up players or plays through pain. "
+                "Coaches who trust youth give young players the edge on close depth-chart calls and early-down "
+                "reps behind the starters; rebuilding clubs, and clubs out of the playoff race, play the kids "
+                "even more."))
     return out
 
 

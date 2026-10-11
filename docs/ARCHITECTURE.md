@@ -247,23 +247,40 @@ and `dpkg|` snaps.
    5. **Pass:** choose the concept (screen/short/medium/deep, play-action, flea-flicker). Pressure is a sigmoid of pass rush minus protection; under pressure the QB is sacked, scrambles or throws it away. Each receiver gets an *openness* score from route skill vs coverage. The QB's read is a softmax over the receivers, sharper for better processors. Then roll completion, interception and drops, and draw yards after the catch from an exponential distribution plus breakaway chances.
    6. **Run:** choose the concept (inside/outside zone, duo, split zone, power, counter, trap, lead, draw, toss, crack toss, pin and pull, buck sweep, jet sweep, reverse, wildcat, designed QB counter and QB power, and the option family: zone read, inverted veer, midline, speed and triple option) from the coach's system (`playbook.SCHEME_RUNS`). Split zone uses the tight end or fullback as the kick-out blocker and the QB runs use the back as a lead blocker (`lead` in `trenches.run_matchups`); crack toss depends on the receivers' run blocking; duo gains against two-high shells. Option plays read an unblocked defender: the QB's decision making against the defender's recognition decides give, keep or pitch and whether the read was right. Blocking vs the front (plus the defensive call) gives `bd`; carrier skill vs tacklers gives `rd`. These set the stuff chance, a short "sure" gain (Gaussian), a long-tailed extra (exponential) and breakaway chances — the NFL shape: median 3 yards, mean ~4.3, about 10% of runs going for 10+.
    7. Resolve: post-snap penalties, injuries, momentum swings, the clock, first downs and turnovers.
-      Injuries (`GameSim._injury_check`): each check's chance is `0.0125 × exposure × (1.55 − durability/100)
+      Injuries (`GameSim._injury_check`): each check's chance is `INJURY_BASE (0.0122) × exposure × (1.55 − durability/100)
       × injury_rate × tiredness`, where the exposure comes from `injuries.EXPOSURE` by role: the ball carrier
       on every touch, the tackler, the target and his defender on a contested incompletion, a sacked or hit
       quarterback, and on every scrimmage play one blocker (a lineman, or a tight end on runs) and one
       defensive lineman, plus on passes one receiver in his route and one defensive back in coverage
       (`_snap_units` lists who is on the field). The weights put about a tenth of injuries on running backs
-      and a third in the trenches, close to NFL shares.
+      and a third in the trenches, close to NFL shares. A player playing through a questionable injury
+      (`injury["play"]`, set by `front_office.game_week_prep`) is checked at `substitutions.HURT_EXPOSURE`
+      times the exposure and plays with `HURT_FORM` less form. An injury with no games to miss is a knock:
+      after `KNOCK_SNAPS` snaps the staff may send him back in (`_knock_returns`,
+      `substitutions.knock_return_chance`: score, playoffs, the coach's protectiveness, the club's youth
+      credit, the user's injury policy); he is listed in `GameResult.returned`.
 3. **Fatigue and rotation.** Every player has an energy value (0-100) for the game. Each snap on the
    field costs energy by position (`engine.DRAIN`, scaled by stamina, heat and the fatigue sliders); the huddle
    gives a little back (less in a no-huddle), the sideline a lot, quarter breaks, timeouts and halftime more.
    Part of each snap's cost is "wear" that caps recovery until halftime. Below 86 energy, physical attributes
    lose `FAT_SLOPE` points per point (mental ones 30% of that) and injury risk rises. Before every snap
-   `_rotate` compares each starter's value with fresher backups (position and user rotation style set how
-   readily) and the better option plays. The depth order wins: a player's value is the best rating at or
-   below his place on the list, discounted by his own fatigue, so a backup only comes in to rest a tired
-   starter, never because he rates higher. Snap counts are recorded. Blowouts late in the fourth quarter
-   send the backups in.
+   `_rotate` compares each starter's value with fresher backups and the better option plays. The depth
+   order wins: a player's value is the best rating at or below his place on the list, discounted by his
+   own fatigue, so a backup only comes in to rest a tired starter, never because he rates higher. How
+   readily: `POS_ROTATION` × the group's style × the snap's leverage. The style is the head coach's
+   (`substitutions.coach_rotation`: five styles in `ROTATION_STYLES`, normalised so the league mean is the
+   old baseline, `GROUP_SCALE` for the line) unless the user set the group on the Depth Chart
+   (`ROTATION_STYLE`). Leverage (`substitutions.leverage`, once per snap): 3rd/4th down, red zone, the last
+   two minutes of a half and a close finish are "high" (starters stay in), 1st down early or in a decided
+   game "low"; `leverage_mult` scales by game management and keeps a coach's whole-game rotation unchanged.
+   CPU clubs with youth credit give prospects (24 or under, 8+ below the ceiling) a small value bonus on
+   low-leverage snaps (`dev_reps`). Snap counts are recorded. Blowouts send the backups in only in the
+   final minute (`_garbage`: `GARBAGE_CLOCK` 60 s, margin from `garbage_margin`: 17 points, adjusted by
+   the coach's protectiveness, youth credit, playoffs, leading or trailing, the user's injury policy).
+   Workload: `GameResult.wear` (end-of-game wear) becomes `Player.load` in `season._apply_game`
+   (`update_load`: the part above `TYPICAL_WEAR` for his position adds up, `LOAD_KEEP` 0.65 a week,
+   `rest_load` for a week without a game, reset each offseason); a player starts the next game
+   `kickoff_wear(load)` short of full energy (at most `WEAR_CAP`).
 4. **Slots on every snap.** `_formation` and `_defense_set` fill the field in order (QB and line, back,
    tight ends, receivers; defensive line, linebackers, corners, safeties) and skip anyone already placed,
    so a player listed at two slots plays one per snap and the next man takes the other. `_snap_units`
@@ -367,7 +384,8 @@ coverage allowed and first downs are credited to players and teams.
 and potential, multiplied by these factors:
 - work rate and ambition;
 - coaching and facilities;
-- playing time;
+- playing time (`development.snap_share`: starts out of 17 or snaps out of `SEASON_SNAPS`, whichever is
+  more, so rotation players, fill-ins and rookies who play without starting get the credit);
 - production vs ability (percentiles computed at season end);
 - injuries and morale;
 - complacency;
@@ -413,8 +431,15 @@ preseason → regular (18 weeks) → playoffs (6 per conference) → season_end
           → resign → draft → free_agency → preseason …
 ```
 
-Each step is a pure function of the league state. Things that happen
-weekly, in `_post_week` (plus single-game records after every game):
+Each step is a pure function of the league state. Before each week's games (and each playoff round)
+`front_office.game_week_prep` has every staff decide on its questionable players (one game left on the
+injury clock): a starter may play through it (`substitutions.play_hurt_chance`: his edge over the next man,
+the stakes, the coach's protectiveness, the injury, the user's injury policy; never a concussion), and a
+CPU club that `front_office.eliminated` says is out of the race raises its youth credit to
+`ELIMINATED_KIDS`. After every game `season._apply_game` turns each player's end-of-game wear into
+workload (`Player.load`). Things that happen weekly, in `_post_week` (plus single-game records after
+every game):
+- teams on a bye shed most of their workload;
 - injuries heal;
 - morale moves;
 - news is written;
@@ -424,7 +449,8 @@ weekly, in `_post_week` (plus single-game records after every game):
   position and anyone training a second position (`position_fit.weekly_learning`);
 - morale reacts a little to snaps away from his position (`position_fit.snaps_mood`);
 - CPU staffs review out-of-position starters and two-way roles (`front_office.weekly_depth`);
-- AI teams manage IR and the practice squad and sign depth;
+- AI teams manage IR and the practice squad and sign depth (clubs out of the race keep healthy veterans
+  28 and older on IR for the rest of the season, `front_office.ir_shutdown`);
 - AI teams trade with each other;
 - holdouts settle, report or drag on;
 - Players of the Week are named.

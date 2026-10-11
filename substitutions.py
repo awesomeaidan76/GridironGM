@@ -12,6 +12,8 @@ The same rules run for the user's club: its head coach decides, unless the user
 picks a rotation or an injury policy on the Depth Chart. Plain tables and small
 functions, so the port can copy them as they are.
 """
+import random
+import zlib
 
 
 def _clip(v, lo, hi):
@@ -57,15 +59,41 @@ def style_weights(off_scheme, front, age):
     if off_scheme in ("Air Raid", "Run and Shoot", "Spread Option", "Wide Zone", "Zone Run"):
         w["Rotates the skill spots"] *= 1.35
     if age >= 58:
-        w["Rides his starters"] *= 1.4
+        w["Rides his starters"] *= 1.2
     elif age <= 44:
-        w["Fresh legs everywhere"] *= 1.3
+        w["Fresh legs everywhere"] *= 1.2
     return w
+
+
+def coach_rotation(c):
+    """His rotation style, drawn once from his system and age (stored on the coach)."""
+    v = getattr(c, "rotation_style", None)
+    if v is None:
+        r = random.Random(zlib.crc32(f"coach-rot:{c.name}:{c.age}".encode()))
+        w = style_weights(c.off_scheme, c.tendencies.get("front"), c.age)
+        v = r.choices(list(w), weights=list(w.values()), k=1)[0]
+        c.rotation_style = v
+    return v
+
+
+def coach_protect(c):
+    """0-1: how protective he is with banged-up and worn-down players (stored on the coach)."""
+    v = getattr(c, "protect", None)
+    if v is None:
+        r = random.Random(zlib.crc32(f"coach-protect:{c.name}:{c.age}".encode()))
+        v = round(_clip(r.gauss(0.5, 0.18) + (c.r("development") - 10) * 0.01, 0.0, 1.0), 3)
+        c.protect = v
+    return v
+
+
+# Calibration: the league's defensive lines rotate a little more than before (NFL starting
+# tackles play about three snaps in four, edge rushers about five in six)
+GROUP_SCALE = {"DL": 1.2}
 
 
 def group_rotation(style, group):
     """How freely a coach of this rotation style rotates a group (1.0 = the league norm)."""
-    return ROTATION_STYLES.get(style, ROTATION_STYLES["Balanced"]).get(group, 1.0)
+    return ROTATION_STYLES.get(style, ROTATION_STYLES["Balanced"]).get(group, 1.0) * GROUP_SCALE.get(group, 1.0)
 
 
 def protect_label(protect):
@@ -80,23 +108,31 @@ def protect_label(protect):
 
 # Coaches keep their best players on the field when the snap matters and rotate on
 # early downs. A coach's game management sets how sharply he does it.
-LEVERAGE = {"high": 0.50, "normal": 1.0, "low": 1.30}
+LEVERAGE = {"high": 0.60, "normal": 1.0, "low": 1.40}
 
 
 def leverage(down, yl, quarter, clock, diff):
-    """How much this snap matters: "high" (3rd/4th down, red zone, end of a half, a close 4th quarter)."""
+    """How much this snap matters: "high" (3rd/4th down, red zone, end of a half, a close finish)."""
     if quarter >= 5 or down >= 3 or yl >= 80 or (quarter in (2, 4) and clock <= 120) \
-            or (quarter == 4 and abs(diff) <= 8):
+            or (quarter == 4 and clock <= 300 and abs(diff) <= 8):
         return "high"
     if down == 1 and (quarter <= 3 or abs(diff) >= 17):
         return "low"
     return "normal"
 
 
+LEVERAGE_SHARE = {"high": 0.48, "normal": 0.27, "low": 0.25}     # share of a game's snaps (measured)
+
+
 def leverage_mult(level, game_management):
-    """Multiplier on a group's rotation for this snap: sharper game managers lean harder."""
+    """
+    Multiplier on a group's rotation for this snap: sharper game managers lean harder. Scaled
+    so a coach rotates as much over a whole game as before; only which snaps changes.
+    """
     aware = 0.3 + 0.6 * _clip(game_management, 1, 20) / 20.0
-    return 1.0 + (LEVERAGE[level] - 1.0) * aware
+    raw = {lv: 1.0 + (m - 1.0) * aware for lv, m in LEVERAGE.items()}
+    mean = sum(LEVERAGE_SHARE[lv] * raw[lv] for lv in raw)
+    return raw[level] / mean
 
 
 # Development snaps: a staff that wants to play its young players gives a prospect with

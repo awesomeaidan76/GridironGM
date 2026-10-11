@@ -334,25 +334,13 @@ def coach_youth_trust(c):
 
 
 def coach_rotation(c):
-    """His rotation style (substitutions.ROTATION_STYLES), drawn once from his system and age."""
-    v = getattr(c, "rotation_style", None)
-    if v is None:
-        import substitutions as sub
-        r = random.Random(zlib.crc32(f"coach-rot:{c.name}:{c.age}".encode()))
-        w = sub.style_weights(c.off_scheme, c.tendencies.get("front"), c.age)
-        v = r.choices(list(w), weights=list(w.values()), k=1)[0]
-        c.rotation_style = v
-    return v
+    import substitutions as sub
+    return sub.coach_rotation(c)
 
 
 def coach_protect(c):
-    """0-1: how protective he is with banged-up and worn-down players."""
-    v = getattr(c, "protect", None)
-    if v is None:
-        r = random.Random(zlib.crc32(f"coach-protect:{c.name}:{c.age}".encode()))
-        v = round(_clamp(r.gauss(0.5, 0.18) + (c.r("development") - 10) * 0.01), 3)
-        c.protect = v
-    return v
+    import substitutions as sub
+    return sub.coach_protect(c)
 
 
 def coach_style(c):
@@ -1219,6 +1207,94 @@ def weekly_depth(lg, team, news=True):
 def weekly_depth_all(lg, news=True):
     for t in lg.teams.values():
         weekly_depth(lg, t, news)
+
+
+# ── Game week: questionable players, lost seasons ─────────────────────────────
+# Before each week's games every staff decides on its questionable players (one game
+# left on the injury clock): a starter who is clearly better than the man behind him
+# may play through it, less often for a protective coach, a strain that comes back
+# worse or a lost season, more often in the playoffs. Concussions always sit. The
+# user's club follows its injury policy on the Depth Chart, or its head coach.
+# A CPU club that is out of the playoff race gives its young players more snaps.
+
+ELIMINATED_KIDS = 3.5          # youth credit once a season is lost (a Youth Movement's)
+
+
+def eliminated(lg):
+    """Clubs that can no longer reach the playoffs (wins only, so a close call waits a week)."""
+    if lg.phase != "regular" or not lg.schedule:
+        return set()
+    left = {a: 0 for a in lg.teams}
+    for wk in lg.schedule[lg.week:]:
+        for h, a in wk:
+            left[h] += 1
+            left[a] += 1
+
+    def wins(a):
+        r = lg.standings[a]
+        return r.w + 0.5 * r.t
+
+    out = set()
+    for conf, divs in lg.structure.items():
+        seeds = lg.conference_seeds(conf)
+        if not seeds:
+            continue
+        last = wins(seeds[-1])
+        for div, teams in divs.items():
+            lead = max(wins(a) for a in teams)
+            for a in teams:
+                best = wins(a) + left[a]
+                if best < lead and best < last:
+                    out.add(a)
+    return out
+
+
+def game_week_prep(lg, playing, playoff=False):
+    import substitutions as sub
+    gone = set() if playoff else eliminated(lg)
+    late = not playoff and lg.week >= max(0, len(lg.schedule) - 6)
+    for abbr in dict.fromkeys(playing):
+        t = lg.teams[abbr]
+        user = abbr == lg.user_abbr
+        if abbr in gone and not user and t.youth_boost < ELIMINATED_KIDS:
+            t.youth_boost = ELIMINATED_KIDS
+            lg.add_news("Depth Chart", f"Out of the playoff race, the {t.name} will give their young "
+                                       f"players more snaps.", abbr)
+        policy = t.injury_policy if user else None
+        protect = sub.coach_protect(t.coach)
+        stakes = 1.0 if playoff else -1.0 if abbr in gone else 0.3 if late else 0.0
+        for p in t.roster:
+            inj = p.injury
+            if not inj or inj.get("weeks") != 1 or inj.get("play") or p.ir or p.ps or p.holdout:
+                continue
+            pos = p.position
+            n = STARTERS.get(pos, 1)
+            ready = [q for q in t.full_depth(pos) if q is p or (not q.sidelined and not q.ir and not q.holdout)]
+            if p not in ready[:n]:
+                continue                     # a backup: no reason to risk him
+            nxt = ready[n] if len(ready) > n else None
+            gap = p.rating_at(pos) - (nxt.rating_at(pos) if nxt is not None else 0.0)
+            if random.random() >= sub.play_hurt_chance(inj["name"], gap, protect, stakes, policy):
+                continue
+            inj["play"] = True
+            if user or p.ca >= 140:
+                lg.add_news("Injury", f"{p.name} ({pos}, {abbr}) is playing through his "
+                                      f"{inj['name'].lower()}.", abbr)
+
+
+def ir_shutdown(lg, team, p, gone):
+    """
+    Whether a club keeps a healthy player on injured reserve for the rest of the season: a CPU
+    club out of the race shuts down its veterans (28 and older) rather than risk them.
+    """
+    if team.abbr == lg.user_abbr or team.abbr not in gone or p.age < 28:
+        return False
+    if not (p.ir or {}).get("shut"):
+        p.ir["shut"] = True
+        if p.ca >= 130:
+            lg.add_news("Injury", f"The {team.name} have shut down {p.name} ({p.position}) for the rest "
+                                  f"of the season.", team.abbr)
+    return True
 
 
 # ── Two-way and multi-role players ────────────────────────────────────────────

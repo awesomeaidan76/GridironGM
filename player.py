@@ -506,6 +506,12 @@ class Player:
         return self.injury is not None
 
     @property
+    def sidelined(self):
+        """Injured and not playing through it this week (front_office.game_week_prep)."""
+        inj = self.injury
+        return inj is not None and not inj.get("play")
+
+    @property
     def height_str(self):
         return f"{self.height // 12}'{self.height % 12}\""
 

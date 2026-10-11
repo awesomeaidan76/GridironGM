@@ -260,10 +260,17 @@ def main():
     step("roster filters")
     dc = win.screens["depth"]
     dc.slots.setCurrentRow(DEPTH_SLOT_DT)
-    dc.rot_combo.setCurrentIndex(3)
+    dc.rot_combo.setCurrentIndex(4)
     assert lg.user_team.rotation.get("DL") == "heavy", lg.user_team.rotation
+    dc.rot_combo.setCurrentIndex(0)
+    assert "DL" not in lg.user_team.rotation, lg.user_team.rotation       # back to the head coach's style
+    dc.rot_combo.setCurrentIndex(4)
     dc.slots.setCurrentRow(DEPTH_SLOT_LB)
-    dc.rot_combo.setCurrentIndex(1)
+    dc.rot_combo.setCurrentIndex(2)
+    dc.inj_combo.setCurrentIndex(2)
+    assert lg.user_team.injury_policy == "protect"
+    dc.inj_combo.setCurrentIndex(0)
+    assert lg.user_team.injury_policy is None
     for i in range(dc.slots.count()):
         dc.slots.setCurrentRow(i)
         if dc.order.rowCount() > 1:

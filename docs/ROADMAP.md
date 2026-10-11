@@ -74,7 +74,9 @@ The owner set the order of this work in October 2026.
   packages judged by what they add to the roster, scouting fog on potential, re-signing by priority within
   a cap plan, early extensions for the young core, priorities and the GM hot seat that change behaviour,
   CPU training focus and upside-based playing time; the difficulty dial reaches all of it.
-- 🔜 **CPU AI, substitutions**: rotation identity per coach, resting starters, load and injury management.
+- ✅ **CPU AI, substitutions**: rotation identity per coach (styles, leverage-aware rotation, protectiveness),
+  blowout subs in the final minute only, workload that carries over between games, knocks, questionable
+  players playing through injuries, IR shutdowns for clubs out of the race, snap-based development credit.
 - 🔜 **Game-day inactives** (48 of 53).
 - 💡 The rest of the depth chart GUI ideas: a game-day preview of who takes the field in each
   personnel group after injuries and rotation; depth warnings fed into the Inbox; "compare at
