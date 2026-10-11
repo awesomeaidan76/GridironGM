@@ -67,7 +67,7 @@ def trade_value(p, lg, team=None):
         surplus = (market_value(p, lg.salary_cap) - p.salary) / lg.salary_cap * 100
         v += surplus * min(3, p.contract["years"]) * 0.6
     if team is not None:
-        need = team.needs().get(p.position, 0)
+        need = fo.needs(team).get(p.position, 0)
         v *= 1.0 + min(0.4, need * 0.15)
         if fo.gm_of(team) is not None:
             v *= fo.player_mult(lg, team, p)

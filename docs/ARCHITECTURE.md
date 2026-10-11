@@ -52,6 +52,14 @@ C++ classes). Widgets read from it and call its commands.
 `74 + 8.7 * (ca - mean_pos) / sd_pos`, softened above 86. Each position is
 anchored to the distribution of its starters (`ratings.OVR_ANCHORS`).
 
+**Team ratings.** `Team.unit_ratings()` averages the starters' slot ratings into units (QB, RB, WR, TE,
+OL, DL, LB, DB, ST) and OFF, DEF and OVR. The 1-99 team rating is the club's standing in its own league:
+`League.unit_scale()` (cached like `strength_order`) holds each unit's league mean and a spread that blends
+this league's (variance) with a typical league's (`ratings.UNIT_SPREAD`, `UNIT_SPREAD_BLEND` 0.5), and
+`ratings.unit_ovr(value, unit, scale)` = `74 + 6.5 × (value − mean) / spread`, softened like player OVR.
+`League.team_rating(team, unit)` is what screens show. Without a scale, `unit_ovr` falls back to the fixed
+`UNIT_ANCHORS` of a freshly generated league.
+
 **Role ratings** re-weight a position's attribute weights with the
 archetype's modifiers (`ratings._role_weights`).
 
@@ -64,7 +72,8 @@ A slot's pool is the players whose own position it is plus anyone listed there
 (`Team.depth_overrides[slot]`, the user's order) or chosen by a CPU staff
 (`Team.cpu_oop`). `Team.depth(slot)` returns the pool in order: listed players
 first, then the rest by `depth_score` (rating at the slot, `NATURAL_BONUS` = 8
-CA at his own position, plus the youth boost for CPU clubs).
+CA at his own position, plus for CPU clubs the youth boost and a reputation credit of up to
+`substitutions.REP_DEPTH` = 4 CA at reputation 100, from `REP_FLOOR` 45).
 `Team.depth_auto` keeps every slot sorted by that score; `depth_locks[slot]`
 holds players at their place whenever a slot is sorted. `auto_order` adds a
 player from another position only when he beats the weakest natural starter by
@@ -274,7 +283,8 @@ and `dpkg|` snaps.
    two minutes of a half and a close finish are "high" (starters stay in), 1st down early or in a decided
    game "low"; `leverage_mult` scales by game management and keeps a coach's whole-game rotation unchanged.
    CPU clubs with youth credit give prospects (24 or under, 8+ below the ceiling) a small value bonus on
-   low-leverage snaps (`dev_reps`). Snap counts are recorded. Blowouts send the backups in only in the
+   low-leverage snaps (`dev_reps`). A name player's value gets up to `REP_SNAPS` (3%) from his reputation
+   (`substitutions.rep_edge`), so close fatigue swaps lean toward him. Snap counts are recorded. Blowouts send the backups in only in the
    final minute (`_garbage`: `GARBAGE_CLOCK` 60 s, margin from `garbage_margin`: 17 points, adjusted by
    the coach's protectiveness, youth credit, playoffs, leading or trailing, the user's injury policy).
    Workload: `GameResult.wear` (end-of-game wear) becomes `Player.load` in `season._apply_game`
@@ -324,7 +334,11 @@ and `dpkg|` snaps.
    longer-developing plays (`PASS_RUSH_BASE` calibrates the pressure rate). The first winner is the pressure
    and the beaten blocker is charged. Run blocking pairs blockers and defenders at the point of attack (and on
    the backside); the average margin is the blocking edge `bd`.
-7. **Quarterback decisions.** `_progression` orders the concept's reads, the QB perceives openness with noise
+7. **Quarterback decisions.** Each receiver's read weight (`_receivers`) is his slot prior (WR1-4, TE1-2,
+   back) × `e^(RECV_DRAW × (OVR at his slot − 74))` (`RECV_DRAW` 0.02, so a tight end and a receiver of the
+   same standing draw alike) × up to `REP_TOUCH` (8%) for reputation × the game plan's target weights ×
+   `busy` (a receiver already getting a big share draws extra attention). The lead back's share of carries
+   moves `REP_CARRY` per point of reputation edge over his backup. `_progression` orders the concept's reads, the QB perceives openness with noise
    that shrinks with decision making, throws when a read clears his threshold (gunslingers lower, later reads
    lower), else checks down, forces it or throws it away. Each extra read adds time for the rush. Smart QBs
    spot blitzes pre-snap and throw hot.
@@ -483,10 +497,26 @@ Every CPU club has three decision makers, all plain data plus small functions:
 - A GM on the hot seat (`hot_seat`: his last three seasons against the owner's bar, softened in the first
   seasons of a rebuild) leans toward buying and away from rebuilding.
 - Plans are set after each season and reviewed two weeks before the trade deadline (`update_plans`).
-- The plan's priorities (`_focus`, explained by `FOCUS_EFFECTS`) each change behaviour: QB search and
-  grooming a successor (trade value and draft board), developing a young QB (no blocking veteran signings),
-  a tight cap (smaller re-signing and free-agency budgets), a closing window and the hot seat (veterans up,
-  future picks down), and locking up the young core (early extensions).
+- **Priorities** (`priorities`, `PRIORITIES`, explained by `FOCUS_EFFECTS`): two or three per club, the best
+  two always and a third if it scores `PRIORITY_BAR`. `priority_scores` rates every candidate:
+  - position groups (`PRIORITY_GROUPS`: QB, OL, RB, WR+TE, EDGE, DT, LB, CB+S, K+P) by how far the starters
+    sit below the league (`group_strengths`, cached; `PRIORITY_WEAKNESS` per sd), `GROUP_BASE`, the GM's
+    `position_value` taste, the head coach's system (`_scheme_lean`: pass lean, front, blitz rate), and how
+    far past their prime the starters are (`PRIORITY_AGE`; sellers skip this and discount non-QB groups);
+  - the QB by `_qb_status`, judged against the league (franchise: 80+ or a top-8 starter at 76+; bridge:
+    top 22 or 70+; else searching), so only clubs without a real answer look for a franchise QB;
+    grooming a successor (a franchise QB 35+) and developing a young QB (24 or under, POT 78+);
+  - the cap (95%+ of next year's cap committed), a closing window, the young core, the hot seat, stockpiling
+    picks (rebuilds), getting younger (sellers with an old core) and landing a star (buyers with a
+    star-chasing GM and few stars);
+  - plus a lean seeded by club, GM and year (`PRIORITY_LEAN`).
+  Effects: `front_office.needs(team)` raises `Team.needs()` at a priority group's positions
+  (`PRIORITY_NEED`: × 1.35 + 0.06) for the draft, free agency, the trade market and trade value; the board adds
+  3 at those positions; QB search and grooming a successor (trade value and draft board), developing a young QB
+  (no blocking veteran signings), a tight cap (smaller re-signing and free-agency budgets), a closing window
+  and the hot seat (veterans up, future picks down), locking up the young core (early extensions), stockpiling
+  picks (pick value × 1.12), getting younger (25 and under × 1.08, 29+ × 0.90) and landing a star (85+ × 1.12,
+  star-first free agency).
 
 **One valuation feeds every decision:**
 - `trades.trade_value` is on the draft-pick chart's scale (`roster_rules.pick_value`). A player's worth grows

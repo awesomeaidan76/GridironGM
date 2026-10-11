@@ -88,7 +88,7 @@ def _sellable(team, min_ovr=0):
 def _need_swap(lg, teams):
     """Two teams with complementary holes swap players, picks balance it."""
     a, b = random.sample(teams, 2)
-    na, nb = a.needs(), b.needs()
+    na, nb = fo.needs(a), fo.needs(b)
     pa_pos = max(nb, key=nb.get)      # what b wants (from a)
     pb_pos = max(na, key=na.get)      # what a wants (from b)
     if pa_pos == pb_pos:
@@ -141,7 +141,7 @@ def _contender_buys(lg, teams):
     seller = _weighted([t for t in teams if t is not buyer], lambda t: _seller_w(lg, t))
     if buyer is None or seller is None:
         return None
-    needs = buyer.needs()
+    needs = fo.needs(buyer)
     cands = [p for p in _sellable(seller, 72) if p.age >= 26 and p.position not in ("K", "P", "FB")]
     if not cands:
         return None
@@ -316,7 +316,7 @@ def depth_churn(lg):
     for team in _ai_teams(lg):
         if random.random() > 0.16:
             continue
-        needs = team.needs()
+        needs = fo.needs(team)
         pos = max(needs, key=needs.get)
         mine = sorted(team.players_at(pos), key=lambda p: p.ca)
         cands = [p for p in lg.free_agents if p.position == pos and not p.is_injured]
@@ -411,7 +411,7 @@ def maybe_offer_user(lg, chance=0.35):
     team = _weighted(_ai_teams(lg), lambda t: 0.3 + _buyer_w(lg, t) + 0.5 * fo.activity(t))
     if team is None:
         return None
-    needs = team.needs()
+    needs = fo.needs(team)
     cands = [p for p in _sellable(user, 66) if needs.get(p.position, 0) > 0.15]
     if not cands:
         return None

@@ -99,7 +99,7 @@ class ScheduleScreen(Screen):
                 else:
                     rows.append([cell(lg.teams[a].full_name, color=accent() if mine else None), "",
                                  cell(lg.teams[h].full_name, color=accent() if mine else None), "",
-                                 "Scheduled", f"OVR {lg.teams[a].overall} @ {lg.teams[h].overall}"])
+                                 "Scheduled", f"OVR {lg.team_rating(a)} @ {lg.team_rating(h)}"])
                     keys.append(None)
             playing = {t for pair in lg.schedule[key] for t in pair}
             byes = [t for t in lg.teams if t not in playing]
@@ -908,7 +908,7 @@ class TeamsScreen(Screen):
     def __init__(self, main):
         super().__init__(main)
         self.tabs = QTabWidget()
-        self.table = DataTable(["Team", "Conf", "Div", "Record", "OVR", "OFF", "DEF", "QB",
+        self.table = DataTable(["Team", "Conf", "Div", "Record", "OVR", "OFF", "DEF",
                                 "Head Coach", "Offense", "Defense", "Payroll", "Titles"], stretch=0)
         self.table.on_activate = self.main.open_team
         self.tabs.addTab(self.table, "Teams")
@@ -929,13 +929,14 @@ class TeamsScreen(Screen):
     def refresh(self):
         lg = self.lg
         rows, keys = [], []
+        sc = lg.unit_scale()
         for t in lg.team_list():
             u = t.unit_ratings()
             r = lg.standings[t.abbr]
             mine = t.abbr == lg.user_abbr
             rows.append([cell(t.full_name, bold=mine, color=accent() if mine else None), t.conference,
-                         t.division, cell(r.wlt(), r.pct), team_cell(u["OVR"], "OVR"), team_cell(u["OFF"], "OFF"),
-                         team_cell(u["DEF"], "DEF"), team_cell(u["QB"], "QB"), t.coach.name, t.coach.off_scheme,
+                         t.division, cell(r.wlt(), r.pct), team_cell(u["OVR"], "OVR", sc),
+                         team_cell(u["OFF"], "OFF", sc), team_cell(u["DEF"], "DEF", sc), t.coach.name, t.coach.off_scheme,
                          t.coach.def_scheme, cell(money(t.payroll), t.payroll), t.titles])
             keys.append(t.abbr)
         self.table.set_rows(rows, keys)

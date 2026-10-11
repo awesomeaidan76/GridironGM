@@ -147,6 +147,27 @@ def dev_rep_bonus(credit, age, gap):
     return DEV_REPS * credit * min(1.5, gap / 15.0)
 
 
+# ── Reputation ────────────────────────────────────────────────────────────────
+
+# Coaches and quarterbacks lean a little toward a name player, a veteran who has done it
+# before, when the ratings are close: a famous receiver gets a few more looks, a well-known
+# backup a few more snaps, a CPU staff lists him a place higher when there is little to
+# choose. Small on purpose: it decides close calls, never a big gap in ability.
+REP_FLOOR = 45            # no edge below this reputation (0-100)
+REP_DEPTH = 4.0           # CPU depth-chart credit at reputation 100 (CA points, about 2 OVR)
+REP_SNAPS = 0.03          # rotation value at reputation 100 (fatigue swaps)
+REP_TOUCH = 0.08          # target weight at reputation 100
+REP_CARRY = 0.04          # lead back's share of carries per point of edge over his backup
+REP_RETURN = 2.5          # CPU returner choice at reputation 100 (return rating points)
+
+
+def rep_edge(reputation):
+    """0-1: how much a player's name counts (0 below REP_FLOOR, 1 at 100)."""
+    if reputation <= REP_FLOOR:
+        return 0.0
+    return min(1.0, (reputation - REP_FLOOR) / (100.0 - REP_FLOOR))
+
+
 # ── Blowouts ──────────────────────────────────────────────────────────────────
 
 GARBAGE_CLOCK = 60        # starters stay in until the final minute (owner rule)

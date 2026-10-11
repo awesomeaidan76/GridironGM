@@ -31,6 +31,7 @@ import packages
 import gameday
 import substitutions as sub
 from coach import sit_tendency, SCHEME_EXECUTION
+from ratings import ovr_from_ca, OVR_MID
 
 QUARTER = 900
 
@@ -65,6 +66,9 @@ PHYSICAL = frozenset([
 ROTATION_STYLE = {"none": 0.3, "light": 0.65, "normal": 1.0, "heavy": 1.5}
 POS_ROTATION = {"DT": 1.6, "EDGE": 1.6, "LB": 0.8, "CB": 0.55, "S": 0.55, "WR": 0.9, "TE": 0.9,
                 "RB": 1.0, "OT": 0.3, "IOL": 0.3, "QB": 0.0}
+# How strongly a receiver's rating draws targets: weight per OVR point at his slot (1-99 scale,
+# so a tight end and a receiver of the same standing draw alike)
+RECV_DRAW = 0.02
 ROT_GROUP = {"DT": "DL", "EDGE": "DL", "LB": "LB", "CB": "DB", "S": "DB", "WR": "WR", "TE": "TE",
              "RB": "RB", "OT": "OL", "IOL": "OL", "QB": "QB"}
 
@@ -253,6 +257,8 @@ class Side:
             gap = rb1.rating_at("RB") - rb2.rating_at("RB")
             share += max(-0.05, min(0.16, gap / 65.0))
         share += (rb1.a("stamina") - 72) / 240.0
+        if rb2 is not None:
+            share += sub.REP_CARRY * (sub.rep_edge(rb1.reputation) - sub.rep_edge(rb2.reputation))
         share += {"Workhorse": 0.08, "Power Back": 0.02, "Elusive Back": -0.02,
                   "Receiving Back": -0.09}.get(rb1.archetype, 0.0)
         share = max(0.42, min(0.93, share))
@@ -644,7 +650,8 @@ class GameSim:
                     val = {}
                     for i, p in enumerate(cand):
                         en = self.energy_of(p)
-                        v = env[i] * (1.0 - k * max(0.0, 94.0 - en) / 100.0 * 1.15)
+                        v = env[i] * (1.0 - k * max(0.0, 94.0 - en) / 100.0 * 1.15) \
+                            * (1.0 + sub.REP_SNAPS * sub.rep_edge(p.reputation))
                         if reps:
                             v *= 1.0 + reps.get(p.id, 0.0)       # early-down reps for a prospect
                         val[p.id] = v
@@ -2814,14 +2821,18 @@ class GameSim:
                 f /= 1.0 + max(0.0, tpg - 8.5) * 0.26     # defenses scheme against a volume star
             return f
         tw = self.poss.ogp["targets"]
+
+        def draw(p, pos):
+            # the better the receiver, the more the offence is built to get him the ball
+            ovr = ovr_from_ca(p.rating_at(pos), pos)
+            return math.exp(RECV_DRAW * (ovr - OVR_MID)) * (1.0 + sub.REP_TOUCH * sub.rep_edge(p.reputation))
         for i, w in enumerate(wrs):
-            pr = prior_wr[i] * (0.55 + 0.45 * w.rating_at("WR") / 130.0) * busy(w) * tw.get(w.id, 1.0)
+            pr = prior_wr[i] * draw(w, "WR") * busy(w) * tw.get(w.id, 1.0)
             if ptype == "screen":
                 pr *= 0.6
             out.append((w, roles[i], pr))
         for i, t in enumerate(tes):
-            pr = (0.94 if i == 0 else 0.40 if i == 1 else 0.18) * (0.55 + 0.45 * t.rating_at("TE") / 130.0) \
-                * busy(t)
+            pr = (0.94 if i == 0 else 0.40 if i == 1 else 0.18) * draw(t, "TE") * busy(t)
             if ptype == "deep":
                 pr *= 0.55
             out.append((t, "TE1" if i == 0 else "TE2", pr))

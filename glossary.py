@@ -142,6 +142,17 @@ RATING_DESC = [
      "where he is; Could make the switch and Long project a few points worse; Emergency option and Not suited "
      "well below."),
     ("Tiers", "Elite 90+, Pro Bowl 82-89, Starter 72-81, Rotation 64-71, Backup 55-63, Fringe below 55."),
+    ("Team ratings (OVR / OFF / DEF)", "A club's standing in its own league this season, built from its starters "
+     "at every position. 74 is the league's average club in each unit; a few points either way is a small edge, "
+     "ten or more a big one. Offense and defense are rated separately, so a club can be strong on one side and "
+     "weak on the other. The spread follows how far apart the league's clubs really are, so in a season of real "
+     "parity the gaps look smaller. The quarterback counts inside the offense rating."),
+    ("Reputation", "Fame and respect around the league, 0-100. It rises with good seasons and awards and fades "
+     "slowly when a player declines. Name players cost more and draw more interest, and they get a slight edge "
+     "in close playing-time calls: a CPU staff lists a well-known veteran a place higher when there is little to "
+     "choose between two players, the quarterback looks his way a little more often, his coach gives him a few "
+     "more snaps when rotating, and a famous lead back keeps a slightly bigger share of the carries. Never "
+     "enough to bench a clearly better player."),
     ("Attributes (1-100)", "90+ world class, 75-89 quality, 60-74 solid starter level, 45-59 backup, below 45 poor."),
     ("Development", "Each offseason a player grows, holds or declines depending on age, potential, work ethic, "
                     "coaching, playing time, production, injuries, scheme fit, mentors and some luck. Playing "
@@ -171,6 +182,10 @@ STATS_DESC = [
     ("Pressured / Pressure%", "Dropbacks where the rush got home before the throw (sacks, hits, hurries). "
      "For a pass rusher, Pressures counts how often he was the one who got there."),
     ("Target share", "Share of the team's targets that went to this player."),
+    ("Who gets the ball", "An offense is built around its best weapons: the better a receiver or tight end is "
+     "at his slot, the more often he is the quarterback's first look, so the top receiver gets the most targets "
+     "and a low-rated backup few. How open each man gets on the play still decides where the ball goes, and "
+     "defenses scheme against a receiver who is getting a huge share."),
     ("YAC/Rec", "Yards after the catch per reception."),
     ("Coverage: Tgt / Cmp / Rating allowed", "Throws at the receiver a defender was covering, completions "
      "allowed and the passer rating on those throws. Lower is better."),
@@ -459,6 +474,13 @@ def front_office_desc():
                 "players taken in the same round. He trusts positions where he has hit and is warier where he "
                 "has missed. GMs also drift toward the ideas of the latest champion, and owners tend to replace "
                 "a fired GM with someone unlike him, so front-office fashions come and go."))
+    out.append(("Priorities", "What a CPU front office is working on this year, two or three per club. Each "
+                "club scores every candidate from its own situation: how each position group ranks in the "
+                "league and how old its starters are, what its GM values (an analytics GM won't chase a running "
+                "back, a trenches GM wants linemen), what its head coach's system needs (a passing system wants "
+                "receivers, a 3-4 wants edge rushers), and its plan, owner, cap sheet and quarterback. Only clubs "
+                "without a real answer at quarterback go looking for a franchise QB. Priorities move the club's "
+                "draft board, free-agent list and trade targets, and change during the season as the roster does."))
     for k, v in fo.FOCUS_EFFECTS.items():
         out.append((f"Priority: {k}", v))
     out.append(("Trade value", "How much a club values a player in a trade, on the same scale as draft picks. It "
@@ -522,7 +544,8 @@ COLUMN_DESC = {
     "Dev": "Development: how well this coach helps players improve.",
     "Form": "Recent form: how well he has played in the last few games compared with his ability.",
     "Morale": "Happiness, 1-100. Low morale hurts performance and makes contract talks harder.",
-    "Rep": "Reputation around the league, 0-100. Famous players cost more and draw more interest.",
+    "Rep": "Reputation around the league, 0-100. Famous players cost more, draw more interest and get a slight "
+           "edge in close playing-time calls.",
     "Personality": "How the staff read his character: work ethic, temperament and ambition.",
     "Archetype": "The kind of player he is at his position (for example Power Back or Slot Receiver).",
     "Arch": "The kind of player he is at his position (for example Power Back or Slot Receiver).",

@@ -407,10 +407,44 @@ def ca_from_ovr(ovr, position):
     return mu + (ovr - OVR_MID) * sd / OVR_SPREAD
 
 
-def unit_ovr(value, unit):
-    """Team unit strength (CA scale) to a 1-99 team rating (75 = league average)."""
-    mu, sd = UNIT_ANCHORS.get(unit, (130.0, 9.0))
-    x = OVR_MID + 6.5 * (value - mu) / sd
+# Team ratings are a club's standing in its own league: the average club reads 74 in every
+# unit, every season, and the spread follows how far apart the league's clubs really are. The
+# spread is blended with a typical league's (measured over the first few seasons of several
+# leagues), so a season of extreme parity still shows small gaps as small.
+UNIT_SPREAD = {
+    "QB": 17.0, "RB": 15.0, "WR": 8.5, "TE": 14.0, "OL": 7.0, "DL": 8.3, "LB": 8.8, "DB": 7.2,
+    "ST": 13.0, "OFF": 6.8, "DEF": 4.8, "OVR": 4.3,
+}
+UNIT_SPREAD_BLEND = 0.5     # weight of the typical spread (variance) against this league's own
+TEAM_POINTS = 6.5           # team rating points per standard deviation
+
+
+def unit_scale(units):
+    """
+    The league's mean and spread of every unit, from each club's unit_ratings(): what
+    unit_ovr compares a club with.
+    """
+    out = {}
+    n = len(units)
+    for k in UNIT_ANCHORS:
+        vals = [u[k] for u in units if k in u]
+        if not vals:
+            continue
+        mu = sum(vals) / len(vals)
+        var = sum((v - mu) ** 2 for v in vals) / len(vals)
+        ref = UNIT_SPREAD.get(k, 9.0) ** 2
+        w = UNIT_SPREAD_BLEND if n >= 8 else 1.0
+        out[k] = (mu, math.sqrt(w * ref + (1.0 - w) * var))
+    return out
+
+
+def unit_ovr(value, unit, scale=None):
+    """
+    Team unit strength (CA scale) to a 1-99 team rating (74 = the league's average club).
+    scale: League.unit_scale() (without one, fixed anchors from a freshly generated league).
+    """
+    mu, sd = (scale or UNIT_ANCHORS).get(unit) or UNIT_ANCHORS.get(unit, (130.0, 9.0))
+    x = OVR_MID + TEAM_POINTS * (value - mu) / max(1.0, sd)
     return int(round(max(1.0, min(99.0, _soft_top(x)))))
 
 
